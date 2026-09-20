@@ -272,17 +272,24 @@ and writing of the SQL Server community, worked through against thirty years of 
 work. Named individually, in alphabetical order, because each shaped a specific part of it:
 
 - **Erik Darling** -- plan reading, and `plan_extract.py` itself (see below).
+  [Darling Data](https://erikdarling.com/).
 - **Grant Fritchey** -- the execution plan as primary evidence: read what the optimizer actually
   did, rather than reasoning from the query text. Every tool here that shreds plan XML starts from
   that premise.
+  [*SQL Server Execution Plans*, 3rd edition](https://www.red-gate.com/simple-talk/featured/sql-server-execution-plans-third-edition-by-grant-fritchey/),
+  free from Redgate; [The Scary DBA](https://www.scarydba.com/).
 - **Brent Ozar Unlimited** -- the diagnostic stance the toolset takes, and `sp_BlitzCache` /
   `sp_BlitzIndex` as the reference it was measured against rather than copied from. Also parameter
   sniffing over skewed data, and the 201-bucket ceiling on a statistics histogram -- which is why
   `usp_TippingPointAnalysis` reads `sys.dm_db_stats_histogram` directly and reports
   `HistogramSkewRatio` and the heaviest value, instead of trusting a density average to describe an
   uneven column, and why the sniffing diagnostic scores cardinality skew as a signal of its own.
+  [Troubleshooting parameter sniffing](https://www.brentozar.com/archive/2016/08/start-troubleshooting-parameter-sniffing-issues/),
+  [the 201 buckets problem](https://www.brentozar.com/archive/2020/07/the-201-buckets-problem-part-2-how-bad-estimates-backfire-as-your-data-grows/).
 - **Paul Randal** -- wait statistics as the first question to ask, and storage-engine internals.
   The timeout finder's wait categorisation exists because of that framing.
+  [SQL Server Wait Types Library](https://www.sqlskills.com/help/waits/),
+  [Wait statistics, or please tell me where it hurts](https://www.sqlskills.com/blogs/paul/wait-statistics-or-please-tell-me-where-it-hurts/).
 - **Kimberly Tripp** -- **the tipping point**: the point at which SQL Server stops using a
   nonclustered index plus lookups and scans instead, because the rows it would return are no longer
   selective enough against the table's page count. `usp_TippingPointAnalysis` is named for it, and
@@ -290,6 +297,8 @@ work. Named individually, in alphabetical order, because each shaped a specific 
   work describes. Also index key design, and the cost of a wide or non-unique clustered key that
   every nonclustered index pays again through its row locator -- the argument behind `CLNU` and
   `CLWIDE`.
+  [The Tipping Point Query Answers](https://www.sqlskills.com/blogs/kimberly/the-tipping-point-query-answers/),
+  [Tipping Point Queries: more questions](https://www.sqlskills.com/blogs/kimberly/tipping-point-queries-more-questions-to-really-test-you/).
 
 What they teach in common is the shape of every tool here: read the plan instead of guessing,
 distrust the estimate, prove a fix before it ships, and never let a tool apply its own
@@ -298,7 +307,8 @@ are this project's own. **None of them is affiliated with this project, none has
 nothing here should be read as their endorsement.**
 
 - **`plan_extract.py` is Erik Darling's `extract.py`**, vendored verbatim under the MIT License from
-  mirror commit `a306273`. Its licence is `LICENSE-plan_extract.txt` and must travel with it.
+  [erikdarlingdata/claude-plugins](https://github.com/erikdarlingdata/claude-plugins) at mirror
+  commit `a306273`. Its licence is `LICENSE-plan_extract.txt` and must travel with it.
   ComparePlans' own comparison logic is first-party; the parser is his.
 - **The index analysis is a clean-room reimplementation** of the *design ideas* behind Jason
   Strate's `sp_IndexAnalysis`. His licence is internal-use-only and prohibits redistribution, so
