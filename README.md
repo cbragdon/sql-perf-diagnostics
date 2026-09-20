@@ -35,6 +35,43 @@ a restart, a `CREATE INDEX`, or memory pressure empties. Query Store survives al
 drop-index recommendation here is weighed against what actually ran over days, not over whatever
 happens to be cached right now.
 
+## Tested at every compatibility level the engine supports
+
+Not a sample of levels -- **all of them.** SQL Server 2025 and every Azure SQL Managed Instance
+update policy accept exactly eight database compatibility levels, **100 through 170**, and each of
+the four T-SQL diagnostics is swept across all eight.
+
+Each sweep rebuilds the test workload at the level under test and compares the stored procedure
+against its stand-alone script **cell for cell** -- one differing column in one row fails the run.
+All four pairs read ALL PASS at every level.
+
+**That also covers every cardinality estimator those levels produce, including the legacy one.**
+The compatibility level does not decide the estimator on its own, which is the part that catches
+people out, and it is measured here rather than assumed. A plan compiles under CE model 70 by three
+independent routes:
+
+| Route | Effect |
+|---|---|
+| Compatibility level 100 or 110 | Every plan in the database compiles at model 70 |
+| `LEGACY_CARDINALITY_ESTIMATION = ON` (database-scoped) | Every plan compiles at model 70 **at any level, 100 through 170** |
+| `USE HINT ('FORCE_LEGACY_CARDINALITY_ESTIMATION')`, or trace flag 9481 | That one statement compiles at model 70, overriding both of the above |
+
+So a database can report compatibility level 160 and still have every estimate produced by the
+2012-era model, with nothing in the level saying so. The parameter-sniffing diagnostic reports both
+facts rather than leaving them to be inferred: `LegacyCEDatabaseSetting` for the database, and per
+row `PlanUsesLegacyCE` read from **the plan's own recorded model** rather than deduced from the
+level -- NULL, never a guess, when a plan records none. The caveat it raises names which of the
+three routes caused it.
+
+It is disclosed, not scored. The estimator decides how often the cardinality-derived signals fire
+-- on this project's own workload, 16 rows read skew-unstable under CE 70 against 12 under CE 150
+-- but some of that skew is real at both, so suppressing the signal would hide it. The reader is
+told which estimator produced the numbers instead.
+
+One difference is tolerated, and printed rather than hidden: below compatibility level 130 the
+engine's float-to-decimal rounding rule changed, so a few averages in the AI-prompt column can
+differ by one unit in the last digit. Every other cell must match exactly.
+
 ## Requirements
 
 | # | Requirement | Notes |
@@ -171,9 +208,9 @@ Two things worth knowing before you read a first result set:
 
 ## Scope and honest limits
 
-- Validated on **SQL Server 2025 Developer Edition**, `AdventureWorks2019`, database compatibility
-  levels **100 through 170** on a single box. The script and procedure forms of each tool are held
-  to cell-for-cell output equivalence and that is tested at every one of those levels.
+- Validated on **SQL Server 2025 Developer Edition** against `AdventureWorks2019`, **on a single
+  box**. The compatibility-level and cardinality-estimator coverage is described above; what it
+  does not include is a second machine or a second engine build.
 - **Azure SQL Managed Instance is expected to work and has not been measured.** Platform detection
   is by edition rather than version number, and the code paths are shared, but expected is not
   measured and this document will not claim otherwise.
@@ -186,6 +223,13 @@ Two things worth knowing before you read a first result set:
   quietly assumed to work.
 
 ## Attribution
+
+**Where the approach came from.** The thinking behind these tools was built on the public training
+and writing of **Brent Ozar Unlimited** and **Erik Darling**, worked through against thirty years of
+hands-on production SQL Server work. What they teach is the shape of every tool here: read the plan
+instead of guessing, distrust the estimate, prove a fix before it ships, and never let a tool apply
+its own recommendation. The implementation, the Query Store correlation layer and any defect in
+either are this project's own -- neither is affiliated with it, and neither has reviewed it.
 
 - **`plan_extract.py` is Erik Darling's `extract.py`**, vendored verbatim under the MIT License from
   mirror commit `a306273`. Its licence is `LICENSE-plan_extract.txt` and must travel with it.
