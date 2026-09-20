@@ -267,12 +267,27 @@ Two things worth knowing before you read a first result set:
 
 ## Attribution
 
-**Where the approach came from.** The thinking behind these tools was built on the public training
-and writing of **Brent Ozar Unlimited** and **Erik Darling**, worked through against thirty years of
-hands-on production SQL Server work. What they teach is the shape of every tool here: read the plan
-instead of guessing, distrust the estimate, prove a fix before it ships, and never let a tool apply
-its own recommendation. The implementation, the Query Store correlation layer and any defect in
-either are this project's own -- neither is affiliated with it, and neither has reviewed it.
+**Where the approach came from.** The thinking behind these tools was built on the public teaching
+and writing of the SQL Server community, worked through against thirty years of hands-on production
+work. Named individually, in alphabetical order, because each shaped a specific part of it:
+
+- **Erik Darling** -- plan reading, and `plan_extract.py` itself (see below).
+- **Grant Fritchey** -- the execution plan as primary evidence: read what the optimizer actually
+  did, rather than reasoning from the query text. Every tool here that shreds plan XML starts from
+  that premise.
+- **Brent Ozar Unlimited** -- the diagnostic stance the toolset takes, and `sp_BlitzCache` /
+  `sp_BlitzIndex` as the reference it was measured against rather than copied from.
+- **Paul Randal** -- wait statistics as the first question to ask, and storage-engine internals.
+  The timeout finder's wait categorisation exists because of that framing.
+- **Kimberly Tripp** -- index key design, and the cost of a wide or non-unique clustered key, which
+  every nonclustered index pays again through its row locator. That argument is why
+  `usp_IndexAnalysis` emits `CLNU` and `CLWIDE` at all.
+
+What they teach in common is the shape of every tool here: read the plan instead of guessing,
+distrust the estimate, prove a fix before it ships, and never let a tool apply its own
+recommendation. The implementation, the Query Store correlation layer, and any defect in either,
+are this project's own. **None of them is affiliated with this project, none has reviewed it, and
+nothing here should be read as their endorsement.**
 
 - **`plan_extract.py` is Erik Darling's `extract.py`**, vendored verbatim under the MIT License from
   mirror commit `a306273`. Its licence is `LICENSE-plan_extract.txt` and must travel with it.
