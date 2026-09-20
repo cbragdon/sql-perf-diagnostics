@@ -277,7 +277,8 @@ work. Named individually, in alphabetical order, because each shaped a specific 
   did, rather than reasoning from the query text. Every tool here that shreds plan XML starts from
   that premise.
   [*SQL Server Execution Plans*, 3rd edition](https://www.red-gate.com/simple-talk/featured/sql-server-execution-plans-third-edition-by-grant-fritchey/),
-  free from Redgate; [The Scary DBA](https://www.scarydba.com/).
+  free from Redgate; [The Scary DBA](https://www.scarydba.com/). Also co-author, with Jason Strate,
+  of the second edition of *Expert Performance Indexing in SQL Server* -- see below.
 - **Brent Ozar Unlimited** -- the diagnostic stance the toolset takes, and `sp_BlitzCache` /
   `sp_BlitzIndex` as the reference it was measured against rather than copied from. Also parameter
   sniffing over skewed data, and the 201-bucket ceiling on a statistics histogram -- which is why
@@ -290,6 +291,16 @@ work. Named individually, in alphabetical order, because each shaped a specific 
   The timeout finder's wait categorisation exists because of that framing.
   [SQL Server Wait Types Library](https://www.sqlskills.com/help/waits/),
   [Wait statistics, or please tell me where it hurts](https://www.sqlskills.com/blogs/paul/wait-statistics-or-please-tell-me-where-it-hurts/).
+- **Jason Strate** -- indexing as a discipline rather than a bag of tips. The *Expert Performance
+  Indexing* series (Apress) runs from *Expert Performance Indexing for SQL Server 2012*, with Ted
+  Krueger, through a second edition with Grant Fritchey, *in SQL Server 2019*, and *in Azure SQL
+  and SQL Server 2022* with Edward Pollack; that body of work is the background `usp_IndexAnalysis`
+  was written against. His `sp_IndexAnalysis` is the tool whose design it answers -- clean-room,
+  under the licence terms set out below.
+  Companion source for the
+  [2019](https://github.com/Apress/expert-perf-index-in-sql-server-2019) and
+  [2022](https://github.com/Apress/expert-performance-indexing-in-azure-SQL-and-SQL-server-2022)
+  editions.
 - **Kimberly Tripp** -- **the tipping point**: the point at which SQL Server stops using a
   nonclustered index plus lookups and scans instead, because the rows it would return are no longer
   selective enough against the table's page count. `usp_TippingPointAnalysis` is named for it, and
