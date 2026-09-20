@@ -276,12 +276,20 @@ work. Named individually, in alphabetical order, because each shaped a specific 
   did, rather than reasoning from the query text. Every tool here that shreds plan XML starts from
   that premise.
 - **Brent Ozar Unlimited** -- the diagnostic stance the toolset takes, and `sp_BlitzCache` /
-  `sp_BlitzIndex` as the reference it was measured against rather than copied from.
+  `sp_BlitzIndex` as the reference it was measured against rather than copied from. Also parameter
+  sniffing over skewed data, and the 201-bucket ceiling on a statistics histogram -- which is why
+  `usp_TippingPointAnalysis` reads `sys.dm_db_stats_histogram` directly and reports
+  `HistogramSkewRatio` and the heaviest value, instead of trusting a density average to describe an
+  uneven column, and why the sniffing diagnostic scores cardinality skew as a signal of its own.
 - **Paul Randal** -- wait statistics as the first question to ask, and storage-engine internals.
   The timeout finder's wait categorisation exists because of that framing.
-- **Kimberly Tripp** -- index key design, and the cost of a wide or non-unique clustered key, which
-  every nonclustered index pays again through its row locator. That argument is why
-  `usp_IndexAnalysis` emits `CLNU` and `CLWIDE` at all.
+- **Kimberly Tripp** -- **the tipping point**: the point at which SQL Server stops using a
+  nonclustered index plus lookups and scans instead, because the rows it would return are no longer
+  selective enough against the table's page count. `usp_TippingPointAnalysis` is named for it, and
+  its `@TippingPointPageFraction` default of `0.333` sits at the top of the 25-33% of pages her
+  work describes. Also index key design, and the cost of a wide or non-unique clustered key that
+  every nonclustered index pays again through its row locator -- the argument behind `CLNU` and
+  `CLWIDE`.
 
 What they teach in common is the shape of every tool here: read the plan instead of guessing,
 distrust the estimate, prove a fix before it ships, and never let a tool apply its own
