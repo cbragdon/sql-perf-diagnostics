@@ -112,8 +112,7 @@ measure differently on purpose — see "Reading the Finders' Output" below.)
 
 ## Diagnostic Procedure
 
-Three scripts, in a fixed order, because each answers a different question and only one of them
-requires anything to already be running:
+Two stages, in a fixed order, because each answers a different question:
 
 1. **`Find-TimeoutStatements_N_QueryStore_v1.sql`** — always start here. Already on, holds days of
    history. Its `TopWaitCategory` and `WaitCoveragePct` columns are where the table above comes
@@ -123,18 +122,14 @@ requires anything to already be running:
 2. **`Paramsniffingdiagnostic_v1.sql`** — same source, asking *why* the plan is unstable. Run it
    when stage one shows more than one plan for the query (`NextStep` hands you the `query_id`).
    Every recommendation it produces is commented-out text for review, never auto-applied.
-3. **`Find-TimeoutStatements_N_XEvents_v1.sql`** — the senior call. Requires a running trace, so it
-   can't be run retroactively — reserve it for cases the first two stages couldn't pin down, or for
-   the one thing Query Store structurally cannot see: a non-DML abort such as a `WAITFOR` call,
-   which produces zero rows in Query Store no matter how long you look.
 
-Match rows between stages on the right key: stage 1 → 2 by `query_id`, stage 1/2 → 3 by
-`query_hash`. Never on object name — a shared statement text between two different procedures
+Match rows between stages on the right key: stage 1 → 2 by `query_id`. Never on object
+name — a shared statement text between two different procedures
 produces the same `query_hash` on purpose.
 
 ### Scoping a run to one object
 
-All three stages take the same parameter. Leave it alone and you get every object, which is the
+Both stages take the same parameter. Leave it alone and you get every object, which is the
 default and the original behaviour:
 
 ```sql
@@ -150,10 +145,6 @@ Four things worth knowing before you use it:
   misspelled name is indistinguishable from "this object never times out", and the second reading
   is the dangerous one. You will get a message naming the problem — wrong spelling, wrong schema,
   wrong database, or an object that exists but isn't a stored procedure.
-- **Stage 3 matches on the bare object name, not the schema-qualified one.** Extended Events
-  records objects without a schema, so two same-named procedures in different schemas are already
-  indistinguishable in that tool's output — targeted or not. Stages 1 and 2 match on the object's
-  actual identity and do not have this limitation.
 - **Ad-hoc and dynamic SQL disappear from a targeted run.** They have no owning object, so there is
   nothing to target them by. This holds regardless of any include-ad-hoc setting.
 - **The run prints its own scope.** Every run says either `--- Scope: ALL objects` or

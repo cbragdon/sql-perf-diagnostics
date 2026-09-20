@@ -5,9 +5,8 @@
 # Finding the statements callers are timing out on
 
 A developer reports a timeout. This family answers, in order: **which statements
-callers abandoned** (stage 1), **why that plan is unstable** (stage 2 = the
-parameter-sniffing pair), and **who was affected and what the true client wait
-was** (stage 3 = Extended Events).
+callers abandoned** (stage 1), and **why that plan is unstable** (stage 2 = the
+parameter-sniffing pair).
 
 This document covers **stage 1** -- `Find-TimeoutStatements_N_QueryStore_v1.sql`
 and its procedure form `DBAdmin.dbo.usp_FindTimeoutStatementsNQueryStore` -- and
@@ -107,9 +106,6 @@ Columns, by group:
   `usp_ParameterSniffingDiagnostic` scoped to that object
   (`USAGE-Paramsniffingdiagnostic_v1.md`), then find the `query_id` this row
   handed you. The hop key from stage 1 to stage 2 is `query_id`.
-- **Single plan, or stage 2 was not enough** (non-DML aborts Query Store never
-  records, *who* was affected, the true end-to-end client wait) -> stage 3, below
-  -- but only if a session was already running.
 
 ---
 
@@ -138,8 +134,6 @@ Columns, by group:
   (2017+).
 - Per **statement**, not per call. A multi-statement procedure's total wait is
   approximated (`PrecedingStatements*`, `ObjectAvgTotalMs_Approx`).
-- Stage 3 cannot be run after the fact -- the session must be live before the
-  timeout.
 - Current tag `v1.1-timeout-family`; the fixture family passes 18/18; database
   compat 100-170 swept on one SQL Server 2025 box
   (`TestRunners/Test-TimeoutCompatLevels.ps1`, 8/8). Not measured on a real
