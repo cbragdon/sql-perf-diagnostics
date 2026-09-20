@@ -26,6 +26,49 @@ them; each of those carries a note at the top saying so.
 The Extended Events stage of the timeout family is likewise not included, and the sections that
 instructed you to run it have been removed from the documents in this release.
 
+## How the five fit together
+
+They are one process, not five unrelated utilities -- each hands the next something concrete.
+
+**When something already hurts, start at the cheapest evidence and narrow.**
+
+1. **Client-timeout finder** (`usp_FindTimeoutStatementsNQueryStore`) -- start here. It reads Query
+   Store, which is already collecting and already holds days of history, so there is nothing to set
+   up and nothing that had to be running before the incident. It answers *which statements are
+   callers giving up on, and what were they waiting for*. Its **`NextStep`** column then says
+   whether the next tool is warranted, and hands over the **`query_id`** to use.
+2. **Parameter-sniffing diagnostic** (`usp_ParameterSniffingDiagnostic`) -- takes that `query_id`
+   and answers *why* the plan is unstable: seven signals scored out of 100, a stability matrix,
+   every plan the statement compiled to side by side with the parameter values each was compiled
+   for, and a candidate index in `BaseIndexCreateSQL`.
+3. **Index analysis** (`usp_IndexAnalysis`) -- run this **before** you create that index. Step 2
+   reasons about one statement **in isolation**; it never looks at what else is on the table or who
+   else reads it, which is exactly why that column is called *base* index and not *recommended*.
+   This is the tool that knows whether the candidate duplicates or overlaps an index you already
+   have, whether widening an existing one is the better move, and what else would lose a reader if
+   you dropped something.
+
+**Before a change ships, the same evidence runs forwards instead of backwards.**
+
+4. **TippingPointAnalysis** (`usp_TippingPointAnalysis`) -- for a predicate you are about to deploy:
+   which estimate will the optimizer actually use, where is the seek-to-scan tipping point, and will
+   this query cross it. Answered from one plan plus statistics, with nothing executed and nothing
+   compiled.
+5. **ComparePlans** (`ComparePlans_v1.py`) -- capture the **actual** plans for two to four rewrite
+   candidates and compare them offline, with no connection to anything. `--analyze-indexes` closes
+   the loop back to step 3: when ComparePlans generates a `CREATE INDEX`, it runs `usp_IndexAnalysis`
+   against that table and tells you whether to realign an existing index instead -- one command for
+   "propose an index, then check it against the ones already there".
+
+**What actually carries between the steps.** Step 1 to step 2 hops on `query_id`. Steps 2, 3 and 5
+all converge on the same decision -- one table, one index -- which is why step 3 belongs between
+*"here is an index that would help this statement"* and actually creating it. Every T-SQL tool takes
+`@DatabaseName` plus an object-level scope, so each step narrows to what the previous one found.
+
+None of this is a required order. Index analysis on its own is a good weekly review, TippingPoint
+answers a question nothing else here asks, and ComparePlans never touches a server at all.
+
+
 ## What makes this different from the tools you already have
 
 The Query Store correlation. `sp_BlitzCache` and `sp_BlitzIndex` are excellent and this is not a
