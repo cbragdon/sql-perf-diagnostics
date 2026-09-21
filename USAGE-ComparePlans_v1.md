@@ -86,9 +86,39 @@ python ComparePlans_v1.py v1.sqlplan v2.sqlplan --baseline "v2"
 ### Output formats
 
 `--full` restores the evidence tables the brief report leaves out -- inputs, signals, leaf access,
-structural deltas, resource deltas and timing:
+structural deltas, resource deltas and timing. The example below is the simplest case there is:
+**the same query text captured twice**, with an index created in between.
 
-![ComparePlans --full: the evidence tables behind the verdict](images/compareplans-full.png)
+```sql
+-- both captures run exactly this
+SELECT TransactionID, Quantity, ActualCost
+FROM   Production.TransactionHistory
+WHERE  Quantity = 10;
+
+-- created between capture A and capture B
+CREATE NONCLUSTERED INDEX IX_cp_f1
+    ON Production.TransactionHistory (Quantity) INCLUDE (ActualCost);
+```
+
+Identical text means an identical query hash, so only the *plan* hash moves -- visible in the
+INPUTS block at the top.
+
+![ComparePlans --full with callouts on the verdict, the access-path signal, the leaf access table and the resource deltas](images/compareplans-full.png)
+
+**What the tool determined, and why:**
+
+1. **`BETTER`, reads 797 -> 5.** A 99% reduction, stated as a measurement rather than a percentage
+   of an estimate.
+2. **`ACCESS_IMPROVED` -- Clustered Index Scan became Index Seek**, and the signal is reads-aware:
+   a scan turning into a seek is only an improvement if the reads actually fall. A seek that then
+   performs thousands of lookups would have fired `LOOKUP_EXPLOSION` instead, as in the first
+   example above.
+3. **LEAF ACCESS, one row per table across both versions** -- physical operator, rows out, logical
+   reads, and which index was used (`PK_TransactionHis` -> `IX_cp_f1`). This is the table to read
+   when a verdict surprises you.
+4. **RESOURCE DELTAS** -- and note `cost 0.714 -> 0.005` sits in the same table as `reads 797 -> 5`
+   but is marked an ESTIMATE. Here the cost happens to agree with reality. The first example is
+   what happens when it does not.
 
 
 
@@ -119,10 +149,50 @@ per version, caveats. Under `--color` it is also the only output in this toolset
 to carry meaning: yellow signal tags, green generated DDL with **orange T-SQL keywords**, and the
 paired rollback in magenta so the undo is impossible to miss.
 
-![ComparePlans brief report: verdict, recommendations, generated covering index with its rollback](images/compareplans-verdict.png)
+### Worked example -- the same plan, good for one parameter and ruinous for another
 
-*Two plans of the same query. The cheaper-looking version does 12,571 logical reads against 797,
-and the tool says so rather than ranking on the cost percentage.*
+One procedure, run twice with the *same* runtime parameter. Only the value it was **compiled** for
+differs:
+
+```sql
+CREATE OR ALTER PROCEDURE dbo.cp_f3_sniff @pid INT AS
+SELECT TransactionID, Quantity, ActualCost
+FROM   Production.TransactionHistory
+WHERE  ProductID = @pid
+ORDER BY TransactionID;
+
+-- capture A: compiled AND run for a COMMON value
+EXEC sp_recompile 'dbo.cp_f3_sniff';
+EXEC dbo.cp_f3_sniff @pid = 870;          -- <- plan A captured here
+
+-- capture B: compiled for a RARE value, then run for the common one
+EXEC sp_recompile 'dbo.cp_f3_sniff';
+EXEC dbo.cp_f3_sniff @pid = 725;          -- rare: caches a seek + lookup plan
+EXEC dbo.cp_f3_sniff @pid = 870;          -- <- plan B captured here, reusing it
+```
+
+That is parameter sniffing in eight lines: B is the plan the optimizer built for 725, doing the
+work of 870.
+
+![ComparePlans brief report with callouts on the verdict, the cost-versus-reads inversion, the lookup count, the generated index and the recommended action](images/compareplans-verdict.png)
+
+**What the tool determined, and why:**
+
+1. **`WORSE`, reads 797 -> 12,571.** The verdict ranks on work done, not on the optimizer's
+   opinion of it.
+2. **The inversion that matters: estimated cost `0.018` against `0.714`, actual reads `12,571`
+   against `797`.** Plan B looks sixteen times *cheaper* and does sixteen times more reading. Rank
+   these two in SSMS by "query cost relative to the batch" and you pick the bad one -- which is
+   why the report says, in as many words, not to.
+3. **`4,187` key/RID-lookup executions against a baseline of 0** -- the mechanism. The seek is
+   genuinely selective for `ProductID = 725`; reused for 870 it finds thousands of rows and looks
+   each one up individually.
+4. **The fix, synthesised from the plan itself** -- keys from the seek, `INCLUDE` from the lookup's
+   own output -- with its `-- ROLLBACK:` on the next line. Both are commented out; nothing here
+   runs DDL.
+5. **`hold -- add a covering index`.** Note it does not say "use `OPTION (RECOMPILE)`": covering
+   the query removes the *lookup*, which is what made the two parameter values want different
+   plans in the first place, so both converge on the same good plan.
 
 The default report is **brief** -- four sections. `--full` adds the rest.
 
@@ -207,11 +277,36 @@ prints which one and why.
 
 ## Check a single plan (`--single`)
 
-![ComparePlans --single: anti-patterns found in one plan, with the index the eager spool stands in for](images/compareplans-single.png)
+### Worked example -- the index SQL Server builds for you, every time it runs
 
-*One plan, no baseline, so no verdict and no ranking -- just the deterministic anti-pattern
-checklist, the DDL the spool is standing in for, and the note that an "Excessive Grant" warning on
-a 1 MB grant is SQL Server's minimum rather than something to tune.*
+A correlated subquery against a column with no index on it:
+
+```sql
+SELECT TOP (5000) th1.TransactionID,
+       (SELECT TOP (1) th2.ActualCost
+        FROM   Production.TransactionHistory th2
+        WHERE  th2.Quantity = th1.Quantity      -- no index on Quantity
+        ORDER BY th2.ActualCost DESC) AS TopCost
+FROM   Production.TransactionHistory th1;
+```
+
+![ComparePlans --single with callouts on the read count, the eager index spool, the permanent index it stands in for, and the minimum-grant note](images/compareplans-single.png)
+
+**What the tool determined, and why:**
+
+1. **274,531 logical reads to return 5,000 rows**, in 499 ms. That ratio is the tell before any
+   analysis.
+2. **`EAGER_INDEX_SPOOL` -- SQL Server builds a temporary index over 113,463 rows at run time**,
+   because no permanent index covers the `Quantity` lookup. It then throws it away and builds it
+   again on the next execution. The build *is* the query's cost.
+3. **The permanent index that spool stands in for**, with keys and `INCLUDE` taken from the
+   spool's own definition rather than guessed, plus the rollback.
+4. **A warning it tells you to ignore.** SQL Server reports `Excessive Grant: requested 1 MB,
+   granted 1 MB, used 0 MB`, which reads like an over-estimate to chase. It is not: 1,024 KB is
+   the server's *minimum* grant (`min memory per query`), so the engine could not have granted
+   less. Flagging that is the difference between a checklist and a tool worth trusting.
+
+There is no verdict or ranking here -- one plan has no baseline to be better or worse than.
 
 You do not always have two plans to compare. `--single <plan>` runs just the
 deterministic anti-pattern checks on **one** plan and stops:
