@@ -119,6 +119,39 @@ treat it as a review flag, not a drop instruction.
 
 ### `index_pros` / `index_cons` -- comma-separated tokens
 
+The table below is a convenience. **`@Output = 'LEGEND'` is the authoritative copy**, because it
+comes out of the artifact in front of you and therefore cannot go stale:
+
+```sql
+EXEC dbo.usp_IndexAnalysis @DatabaseName = 'YourDb', @Output = 'LEGEND';
+```
+
+It runs before any collection -- no scan, no Query Store read, nothing touched in the target
+database -- so it is safe to run anywhere, any time, just to read the vocabulary.
+
+![The full pros and cons token vocabulary printed by @Output = 'LEGEND', with callouts on four
+instructive entries](images/indexanalysis-legend.png)
+
+**Four entries worth reading closely, because each teaches how the vocabulary works:**
+
+1. **`$ $$ $$$ $$$+` carries a measurement, not a flag.** More `$` is more read-dominant --
+   at least 1, 10, 100 or 1000 reads per write. Several tokens work this way (`FILL<n>`,
+   `NCMANY<n>`, `IDENT<n>%`), so the token itself usually tells you the magnitude and you do not
+   have to go looking for the column it came from.
+2. **`TOOSOON` is a statement about the EVIDENCE, not about the index.** It means a `DROP-USAGE`
+   verdict was *withheld* because the instance has not been up long enough for the usage counters
+   to mean anything. It says nothing about the index at all. The entry also names its old spelling
+   -- `RECENT`, which read as "recently created" and was exactly the wrong idea -- so output you
+   captured before the rename still decodes.
+3. **`HYPO` has its own `row_kind`.** A hypothetical index is a Tuning Advisor leftover with no
+   data and no storage; nothing else on the row is measured *because there is nothing there to
+   measure*, which is why it is kept out of the ordinary index rows rather than analysed as one.
+4. **`NOTNULL<n>of<m>` reads backwards, and says so.** A LOWER n is the finding -- `0of7` is worse
+   than `1of7`. Both it and `STRING<n>of<m>` carry their own denominator, so the ratio that makes
+   it a finding is visible at the point you read it rather than in a footnote.
+
+
+
 Pros: `PK`, `UQ` (unique), `CLU` (clustered), `FK`, `MIFK` (supports an FK), and
 read:write bands `$` / `$$` / `$$$` / `$$$+`.
 
