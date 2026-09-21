@@ -387,10 +387,13 @@ output are the record.
 
 ## Optional -- check the recommended index against the table (`--analyze-indexes`)
 
-> **Worked example:** [EXAMPLE-OfflineIndexAnalysis.md](EXAMPLE-OfflineIndexAnalysis.md) takes a
-> `.sqlplan` with no server available, gets a synthesised index out of it, and then shows what
+> **Worked examples:** [EXAMPLE-OfflineIndexAnalysis.md](EXAMPLE-OfflineIndexAnalysis.md) takes
+> a `.sqlplan` with no server available, gets a synthesised index out of it, and then shows what
 > the optional live step adds -- including a dead 2.45 MB index on the same table that the plan
-> could never have revealed.
+> could never have revealed. [EXAMPLE-IndexRealign.md](EXAMPLE-IndexRealign.md) goes further:
+> the missing-index DMV proposes an index that removes the lookup but leaves a Sort, and
+> `--realign-missing-indexes` reorders the same columns -- using the plan's own Sort operator
+> rather than the query text -- so the Sort goes too.
 
 When the tool generates a `CREATE INDEX`, it has looked only at the plan in front
 of it -- not at what indexes the table already has, who else reads them, or

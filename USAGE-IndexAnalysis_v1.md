@@ -212,6 +212,10 @@ can fall behind it. Four tokens were renamed on 2026-09-13 -- `RECENT` ->
 -> `STRING<n>of<m>` -- and each legend entry names its old spelling, so output
 captured before that date still decodes.
 
+> **Worked example:** [EXAMPLE-IndexRealign.md](EXAMPLE-IndexRealign.md) shows a missing-index
+> proposal, the driving `query_id` the Query Store bridge attaches to it, and the realigned key
+> that removes the driving query's Sort as well as its lookup.
+
 ### `create_index_sql` / `drop_index_sql`
 
 The generated statement, as a `-- ` line comment. Copy it, remove the `-- `,
