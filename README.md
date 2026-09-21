@@ -5,12 +5,13 @@ problems. Everything here is **reviewable T-SQL, PowerShell or Python that a DBA
 nothing installs an agent, schedules a job, or applies a change on its own. Every fix the tools
 suggest is emitted as **commented-out text for a human to review**, never as live DDL.
 
-Two of the five are reactive (something already hurt). Three are proactive (run them before a change
-ships).
+Some are reactive, some proactive, and some are either depending on when you run them. The last
+column says which; the terms are defined straight after the table, because they are the axis the
+whole toolset is organised on.
 
 | Tool | Answers | Ships as | Reactive / proactive |
 |---|---|---|---|
-| **Parameter-sniffing diagnostic** | Which statements have unstable plans, why, and what index or recompile would help | stored procedure | Reactive |
+| **Parameter-sniffing diagnostic** | Which statements have unstable plans, why, and what index or recompile would help | stored procedure | Either |
 | **Client-timeout finder** | Which statements callers are abandoning, and what they were waiting on | stored procedure | Reactive |
 | **Index analysis** | Duplicates, overlaps, unused indexes, missing indexes, FK gaps, heap and structural findings -- weighted by what actually ran | stored procedure | Either |
 | **TippingPointAnalysis** | For a given predicate, what estimate the optimizer will use and whether it will tip from seek to scan -- before a bad plan is ever compiled | stored procedure | Proactive |
@@ -25,6 +26,34 @@ them; each of those carries a note at the top saying so.
 
 The Extended Events stage of the timeout family is likewise not included, and the sections that
 instructed you to run it have been removed from the documents in this release.
+
+## What "reactive" and "proactive" mean here
+
+The line is **whether the problem has already happened** -- not how serious it is, and not how
+clever the tool is.
+
+**Reactive** -- something already hurt. A query is slow now, a caller gave up, someone filed a
+ticket. The engine has already recorded what took place, so the job is to read that record and say
+*what went wrong, and why*. The evidence is Query Store, the plan cache and the DMVs, and it is
+necessarily about the past. The limit that comes with it: you can only diagnose what was captured
+while it happened.
+
+**Proactive** -- nothing has gone wrong yet, and the point is to keep it that way. You have a
+change in hand -- a rewrite, a new predicate, an index you are weighing up -- and the question is
+*what will happen if you ship this*. The evidence is a plan, a set of statistics, an estimate: what
+the optimizer would do, read without waiting for it to hurt anyone. The limit that comes with it:
+it reasons about one candidate at a time, not about your whole workload.
+
+**Either** -- the same tool answers both questions, and only *when you run it* decides which.
+Index analysis pointed at a table you are already chasing is reactive; the identical command run as
+a scheduled review, turning up duplicates and unused indexes nobody has complained about, is
+proactive. The parameter-sniffing diagnostic is the same: handed a `query_id` by the timeout
+finder it is reactive, swept across a database for Critical-banded statements nobody has reported
+it is proactive -- which is what the scoring and banding are *for*.
+
+**The word is proactive, not preventive**, and the difference is deliberate. Nothing here prevents
+anything. Every tool emits commented-out text and a person decides whether to run it. The axis is
+when you reach for a tool, not what authority it has been given.
 
 ## How the five fit together
 
