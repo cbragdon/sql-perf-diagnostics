@@ -92,6 +92,56 @@ The procedure output is identical to the script's, plus a leading
 
 ## Step 3 -- read result set 1 (one row per predicate)
 
+### Worked example -- a local variable the optimizer is not allowed to sniff
+
+```sql
+CREATE OR ALTER PROCEDURE dbo.tp1_localvar_eq_skewed AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE @pid INT = 870;                       -- a LOCAL VARIABLE, not a parameter
+    SELECT SalesOrderID, OrderQty, UnitPrice
+    FROM   Sales.SalesOrderDetail
+    WHERE  ProductID = @pid;
+END
+```
+
+`ProductID` is skewed: 870 is a heavy value. But `@pid` is a *variable*, assigned at run time, so
+its value is not available when the statement is compiled and the optimizer cannot look 870 up in
+the histogram. Nothing here has gone wrong yet -- no bad plan, no complaint, nothing in Query
+Store. That is the point: this tool answers the question *before* any of that.
+
+```sql
+EXEC dbo.usp_TippingPointAnalysis
+     @DatabaseName = 'AdventureWorks2019',
+     @ObjectName   = 'dbo.tp1_localvar_eq_skewed';
+```
+
+![Tipping-point output for a local-variable predicate, with callouts on the estimate source, the
+model check, the histogram truth and the predicted tipping point](images/tippingpoint-estimate.png)
+
+*Selected columns from result set 1; the full set is 40 columns wide.*
+
+**What the tool determined, and why:**
+
+1. **`LocalVar` + `EstimateSource = Density` -- the cause.** Unable to sniff the value, the
+   optimizer falls back to the density vector: the *average* rows per distinct `ProductID`, which
+   is 456. It never looks at 870 specifically.
+2. **`ComputedOptimizerEstimate` 456 = `PlanEstimateRows` 456, and `ModelExplainsPlan = yes`.**
+   This is the column that makes the rest trustworthy: the tool's own model of what the optimizer
+   *would* do is checked against the number the plan actually carries. When those disagree the
+   flag says so, and the prediction should not be relied on.
+3. **`HistogramMaxEqRows` 4,688 against that estimate -- `EstimateVsTruthRatio` 10.28.** The
+   heaviest value has ten times the rows the plan is built for. Memory grant, join type and index
+   choice were all sized for 456.
+4. **`TippingPointRows` 413, `WillTip = already scanning`.** Below roughly 413 rows a seek plus
+   lookups beats a scan of this table; above it the scan wins. The estimate of 456 is already past
+   that line, so the plan is scanning -- and for the heavy value it is scanning while believing it
+   will touch 456 rows.
+
+The fix follows from which of those is wrong, and the `Fix` column spells it out. Nothing was
+executed and nothing was compiled to reach this: it is read from one plan plus the statistics that
+are already there.
+
 Rows are ordered worst-first by `EstimateVsTruthRatio`. Read a row left to right
 in five groups.
 
