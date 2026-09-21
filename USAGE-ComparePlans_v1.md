@@ -387,6 +387,11 @@ output are the record.
 
 ## Optional -- check the recommended index against the table (`--analyze-indexes`)
 
+> **Worked example:** [EXAMPLE-OfflineIndexAnalysis.md](EXAMPLE-OfflineIndexAnalysis.md) takes a
+> `.sqlplan` with no server available, gets a synthesised index out of it, and then shows what
+> the optional live step adds -- including a dead 2.45 MB index on the same table that the plan
+> could never have revealed.
+
 When the tool generates a `CREATE INDEX`, it has looked only at the plan in front
 of it -- not at what indexes the table already has, who else reads them, or
 whether one is a near-duplicate of the new one. `--analyze-indexes SERVER` closes
