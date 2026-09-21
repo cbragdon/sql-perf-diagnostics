@@ -85,6 +85,13 @@ python ComparePlans_v1.py v1.sqlplan v2.sqlplan --baseline "v2"
 
 ### Output formats
 
+`--full` restores the evidence tables the brief report leaves out -- inputs, signals, leaf access,
+structural deltas, resource deltas and timing:
+
+![ComparePlans --full: the evidence tables behind the verdict](images/compareplans-full.png)
+
+
+
 | Flag | Use |
 |---|---|
 | *(none)* | The **brief** text report -- verdict, recommendations (each with a `what happened:` line in plain language), recommended action, caveats. Colour is **auto** (on to a terminal, off when piped). |
@@ -106,6 +113,16 @@ python ComparePlans_v1.py v1.sqlplan v2.sqlplan --baseline "v2"
 ---
 
 ## Step 3 -- read the verdict
+
+The default `--format text` report is brief -- verdict, recommendations, one recommended action
+per version, caveats. Under `--color` it is also the only output in this toolset that uses colour
+to carry meaning: yellow signal tags, green generated DDL with **orange T-SQL keywords**, and the
+paired rollback in magenta so the undo is impossible to miss.
+
+![ComparePlans brief report: verdict, recommendations, generated covering index with its rollback](images/compareplans-verdict.png)
+
+*Two plans of the same query. The cheaper-looking version does 12,571 logical reads against 797,
+and the tool says so rather than ranking on the cost percentage.*
 
 The default report is **brief** -- four sections. `--full` adds the rest.
 
@@ -189,6 +206,12 @@ prints which one and why.
 ---
 
 ## Check a single plan (`--single`)
+
+![ComparePlans --single: anti-patterns found in one plan, with the index the eager spool stands in for](images/compareplans-single.png)
+
+*One plan, no baseline, so no verdict and no ranking -- just the deterministic anti-pattern
+checklist, the DDL the spool is standing in for, and the note that an "Excessive Grant" warning on
+a 1 MB grant is SQL Server's minimum rather than something to tune.*
 
 You do not always have two plans to compare. `--single <plan>` runs just the
 deterministic anti-pattern checks on **one** plan and stops:
