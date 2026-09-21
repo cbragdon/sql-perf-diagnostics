@@ -66,6 +66,11 @@ named in `@ExcludeDatabases`, or "it hosts this procedure" when
 
 ## Step 2 -- read the result set (one row per aborted plan)
 
+> **Worked example:** [EXAMPLE-TimeoutCauses.md](EXAMPLE-TimeoutCauses.md) runs four statements
+> that are each aborted by a client at three seconds and shows the finder attributing each to a
+> *different* cause -- CPU starvation, blocking, a cold cache and memory-grant queueing -- with
+> real output, how each condition was produced, and what the abort counts do and do not mean.
+
 **What counts as a timeout:** `execution_type = 3` -- a *client-initiated*
 aborted execution. The client (application, driver, SSMS) gave up; the server was
 still working. The same statement can also have completed successfully at other
