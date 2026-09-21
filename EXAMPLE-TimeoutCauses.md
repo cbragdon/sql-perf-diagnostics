@@ -79,4 +79,9 @@ shows more than one plan, and `NextStep` then carries the `query_id` to pass to
 
 Reading the tool correctly includes reading it when it tells you to go no further.
 
+> **About the input.** The `PSD_Test*` procedures are this project's own timeout fixtures, which
+> are apparatus for its equivalence gates and are not part of this release. The output above is
+> real, not mocked. On your own instance, run the finder with no `@TargetObjectName` and it will
+> report whatever statements callers have actually abandoned in the lookback window.
+
 Back to [USAGE-FindTimeoutStatements_v1.md](USAGE-FindTimeoutStatements_v1.md).

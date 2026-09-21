@@ -96,5 +96,11 @@ that is a judgement only a person can make.
 
 Everything above is commented-out text. Nothing was created, altered or dropped.
 
+> **About the input.** The `.sqlplan` used here is one of this project's test fixtures, which are
+> apparatus for its own equivalence gates and are not part of this release. The output above is
+> real, not mocked. To follow along on your own query, capture an **actual** plan -- in SSMS,
+> Ctrl+M then run and save the plan, or `SET STATISTICS XML ON;` and save the XML with a
+> `.sqlplan` extension. An estimated plan is rejected: the analysis needs runtime numbers.
+
 Back to [USAGE-ComparePlans_v1.md](USAGE-ComparePlans_v1.md) ·
 [USAGE-IndexAnalysis_v1.md](USAGE-IndexAnalysis_v1.md).

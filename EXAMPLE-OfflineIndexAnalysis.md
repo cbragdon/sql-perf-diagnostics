@@ -86,4 +86,10 @@ If the live step fails -- no `sqlcmd`, server unreachable, `usp_IndexAnalysis` n
 the section reports the error and the exit code stays `0`. The offline analysis above it is
 unaffected, because it never needed the server in the first place.
 
+> **About the input.** The `.sqlplan` used here is one of this project's test fixtures, which are
+> apparatus for its own equivalence gates and are not part of this release. The output above is
+> real, not mocked. To follow along on your own query, capture an **actual** plan -- in SSMS,
+> Ctrl+M then run and save the plan, or `SET STATISTICS XML ON;` and save the XML with a
+> `.sqlplan` extension. An estimated plan is rejected: the analysis needs runtime numbers.
+
 Back to [USAGE-ComparePlans_v1.md](USAGE-ComparePlans_v1.md).

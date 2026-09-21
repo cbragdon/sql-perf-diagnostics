@@ -92,6 +92,7 @@ BEGIN
         @HasPlanStats   BIT = 0,
         @HasPlanFeedbk  BIT = 0,
         @HasPlanFeedbackView BIT = 0,
+        @HasQueryVariantView BIT = 0,
         @QsActualState  TINYINT,
         @QsStateDesc    NVARCHAR(60),
         @TargetObjectId INT,
@@ -388,6 +389,9 @@ BEGIN
         [PlanCardinalityEstimationModel]       int NULL,
         [MixedCEModelAcrossPlans]              varchar(3) NULL,
         [PlanUsesLegacyCE]                     varchar(3) NULL,
+        [PspoRole]                             nvarchar(12) NULL,
+        [PspoParentQueryId]                    bigint NULL,
+        [PspoVariantCount]                     int NULL,
         [AI Prompt]                            xml NULL,
         [AIPromptText]                         nvarchar(max) NULL,  -- staging: stripped into [AI Prompt] after the loop, then dropped
         [AIPromptTcRowId]                      int NULL             -- internal: rejoins a row to ITS table candidate for the prompt UPDATEs; dropped after the loop
@@ -477,7 +481,8 @@ BEGIN
     SELECT @HasQueryStoreOut = CASE WHEN OBJECT_ID(''sys.query_store_query'')          IS NULL THEN 0 ELSE 1 END,
            @HasWaitStatsOut  = CASE WHEN OBJECT_ID(''sys.query_store_wait_stats'')     IS NULL THEN 0 ELSE 1 END,
            @HasPlanStatsOut  = CASE WHEN OBJECT_ID(''sys.dm_exec_query_plan_stats'')   IS NULL THEN 0 ELSE 1 END,
-           @HasPlanFeedbkOut = CASE WHEN OBJECT_ID(''sys.query_store_plan_feedback'')  IS NULL THEN 0 ELSE 1 END;
+           @HasPlanFeedbkOut = CASE WHEN OBJECT_ID(''sys.query_store_plan_feedback'')  IS NULL THEN 0 ELSE 1 END,
+           @HasQueryVarOut   = CASE WHEN OBJECT_ID(''sys.query_store_query_variant'')  IS NULL THEN 0 ELSE 1 END;
 
     SELECT @TargetObjectIdOut = CASE WHEN @TargetObjectNameIn IS NOT NULL
                                      THEN OBJECT_ID(@TargetObjectNameIn) END;';
@@ -488,6 +493,7 @@ BEGIN
           @CaptureModeOut NVARCHAR(60) OUTPUT,
           @HasQueryStoreOut BIT OUTPUT, @HasWaitStatsOut BIT OUTPUT,
           @HasPlanStatsOut BIT OUTPUT, @HasPlanFeedbkOut BIT OUTPUT,
+          @HasQueryVarOut BIT OUTPUT,
           @LegacyCeOut NVARCHAR(40) OUTPUT,
           @TargetObjectIdOut INT OUTPUT',
         @TargetObjectNameIn = @TargetObjectName,
@@ -498,6 +504,7 @@ BEGIN
         @HasWaitStatsOut    = @HasWaitStats   OUTPUT,
         @HasPlanStatsOut    = @HasPlanStats   OUTPUT,
         @HasPlanFeedbkOut   = @HasPlanFeedbk  OUTPUT,
+        @HasQueryVarOut     = @HasQueryVariantView OUTPUT,
         @LegacyCeOut        = @LegacyCEDatabaseSetting OUTPUT,
         @TargetObjectIdOut  = @TargetObjectId OUTPUT;
 
@@ -539,6 +546,7 @@ BEGIN
     DROP TABLE IF EXISTS #RuntimeRollup;
     DROP TABLE IF EXISTS #WaitRollup;
     DROP TABLE IF EXISTS #GrantFeedback;
+    DROP TABLE IF EXISTS #PspoVariant;
     DROP TABLE IF EXISTS #CacheMatch;
     DROP TABLE IF EXISTS #ClusteringKeyColumns;
     DROP TABLE IF EXISTS #TableSizeLookup;
@@ -589,6 +597,17 @@ BEGIN
         plan_id       BIGINT       NOT NULL,
         FeedbackState NVARCHAR(60) NULL,
         AdditionalKB  BIGINT       NULL
+    );
+
+    /*  PSPO query variants -- full account in Paramsniffingdiagnostic_v1.sql, Section 3c.
+        sys.query_store_query_variant is PER DATABASE, so it is read inside the USE [target] batch;
+        this table is created out here because a temp table that batch writes to must live in the
+        outer scope, or it dies with the batch.                                                  */
+    CREATE TABLE #PspoVariant (
+        variant_query_id BIGINT NOT NULL PRIMARY KEY,
+        parent_query_id  BIGINT NOT NULL,
+        parent_object_id BIGINT NULL,
+        variant_count    INT    NOT NULL
     );
 
     CREATE TABLE #CacheMatch (
@@ -662,7 +681,10 @@ BEGIN
         CacheTotalSpills           BIGINT         NULL,
         CacheMaxSpills             BIGINT         NULL,
         CacheMinDop                BIGINT         NULL,
-        CacheMaxDop                BIGINT         NULL
+        CacheMaxDop                BIGINT         NULL,
+        PspoRole                   NVARCHAR(12)   NULL,
+        PspoParentQueryId          BIGINT         NULL,
+        PspoVariantCount           INT            NULL
     );
 
     CREATE TABLE #ClusteringKeyColumns (
@@ -816,6 +838,35 @@ BEGIN
     END;
 
     /*----------------------------------------------------------------------------------------
+      PSPO QUERY VARIANTS -- 2022+ and MI. Without this a parameter-sensitive statement is
+      INVISIBLE: a variant carries object_id 0 and holds every execution, while the dispatcher
+      carries the object_id and records no runtime at all, so the collection below dropped both.
+      Measured 2026-09-21; the full account is in the script's Section 3c.
+    ----------------------------------------------------------------------------------------*/
+    IF @HasQueryVariantView = 1
+    BEGIN
+        SET @Sql = @Use + N'
+        INSERT INTO #PspoVariant (variant_query_id, parent_query_id, parent_object_id, variant_count)
+        SELECT v.query_variant_query_id,
+               MIN(v.parent_query_id),
+               MIN(pq.object_id),
+               MIN(vc.n)
+        FROM sys.query_store_query_variant v
+        JOIN sys.query_store_query pq ON pq.query_id = v.parent_query_id
+        CROSS APPLY (SELECT COUNT(DISTINCT v2.query_variant_query_id)
+                     FROM sys.query_store_query_variant v2
+                     WHERE v2.parent_query_id = v.parent_query_id) vc(n)
+        GROUP BY v.query_variant_query_id;';
+
+        BEGIN TRY
+            EXEC sys.sp_executesql @Sql;
+        END TRY
+        BEGIN CATCH
+            PRINT '*** PSPO variant mapping skipped for ' + @DatabaseName + ': ' + ERROR_MESSAGE() + ' ***';
+        END CATCH
+    END;
+
+    /*----------------------------------------------------------------------------------------
       MEMORY GRANT FEEDBACK -- 2022+ and MI. An annotation: never fatal.
     ----------------------------------------------------------------------------------------*/
     IF @HasPlanFeedbk = 1 AND @AnnotateMemoryGrantFeedback = 1
@@ -865,7 +916,8 @@ BEGIN
          CacheMinLogicalReads, CacheMaxLogicalReads, CacheTotalLogicalWrites, CacheTotalRows,
          CacheMinRows, CacheMaxRows, CacheStmtStart, CacheStmtEnd,
          CacheSqlHandle, CacheIsThisStatement, CacheSameHashStatements, CacheStmtOrdinal,
-         CacheAttributionDeclined, CacheActualPlanDeclined)
+         CacheAttributionDeclined, CacheActualPlanDeclined,
+         PspoRole, PspoParentQueryId, PspoVariantCount)
     SELECT
         qsq.query_id,
         qsp.plan_id,
@@ -874,7 +926,8 @@ BEGIN
         CONVERT(VARCHAR(34), qsp.query_plan_hash, 1),
         CONVERT(VARCHAR(34), qsq.query_hash, 1),
         qsq.object_id,
-        ISNULL(OBJECT_NAME(qsq.object_id), N''AdHocOrDynamicSQL''),
+        ISNULL(OBJECT_NAME(COALESCE(NULLIF(qsq.object_id, 0), pv.parent_object_id)),
+               N''AdHocOrDynamicSQL''),
         qst.query_sql_text,
         EP.EstPlanXml,
         rr.TotalExecutions, rr.AvgLogicalReads, rr.MaxLogicalReads, rr.AvgDurationMs,
@@ -901,11 +954,15 @@ BEGIN
         dqs.total_logical_reads, dqs.min_logical_reads, dqs.max_logical_reads, dqs.total_logical_writes,
         dqs.total_rows, dqs.min_rows, dqs.max_rows, dqs.statement_start_offset, dqs.statement_end_offset,
         CONVERT(VARBINARY(64), dqs.sql_handle), dqs.IsThisStatement, dqs.SameHashStatements, dqs.StmtOrdinal,
-        CAST(0 AS BIT), CAST(0 AS BIT)
+        CAST(0 AS BIT), CAST(0 AS BIT),
+        CASE WHEN pv.variant_query_id IS NOT NULL THEN N''Variant'' END,
+        pv.parent_query_id,
+        pv.variant_count
     FROM sys.query_store_query qsq
     JOIN sys.query_store_query_text qst ON qsq.query_text_id = qst.query_text_id
     JOIN sys.query_store_plan qsp       ON qsq.query_id = qsp.query_id
     JOIN #RuntimeRollup rr              ON qsp.plan_id = rr.plan_id
+    LEFT JOIN #PspoVariant pv           ON pv.variant_query_id = qsq.query_id
     CROSS APPLY (SELECT TRY_CAST(qsp.query_plan AS XML) AS EstPlanXml) EP
     OUTER APPLY (
         SELECT TOP (1) qs2.plan_handle, qs2.sql_handle, qs2.query_plan_hash, qs2.last_execution_time,
@@ -925,13 +982,19 @@ BEGIN
         WHERE qs2.query_hash = qsq.query_hash
           AND st2.dbid = DB_ID()
           AND ISNULL(st2.objectid, 0) = ISNULL(qsq.object_id, 0)
+          /*  Declines for a PSPO variant, explicitly rather than as a side effect of the dbid
+              guard above -- see the long note in Section 3c of the script. Stated here because the
+              two artifacts must decline for the SAME reason, not merely reach the same answer.  */
+          AND pv.variant_query_id IS NULL
         ORDER BY IsThisStatement DESC, qs2.last_execution_time DESC
     ) dqs
     CROSS APPLY (
         SELECT CAST(NULL AS XML) AS CacheActualPlanXML, 0 AS CacheActualPlanAvailable
     ) ap
-    WHERE (@TargetObjectIdIn IS NULL OR qsq.object_id = @TargetObjectIdIn)
-      AND (qsq.object_id IN (SELECT object_id FROM sys.objects WHERE type = ''P'')
+    WHERE (@TargetObjectIdIn IS NULL
+           OR COALESCE(NULLIF(qsq.object_id, 0), pv.parent_object_id) = @TargetObjectIdIn)
+      AND (COALESCE(NULLIF(qsq.object_id, 0), pv.parent_object_id)
+               IN (SELECT object_id FROM sys.objects WHERE type = ''P'')
        OR (@IncludeAdHocIn = 1
            AND ISNULL(qsq.object_id, 0) = 0
            AND (@ExcludeSelfIn = 0
@@ -2778,6 +2841,9 @@ BEGIN
 
         sb.MixedCEModelAcrossPlans,
         sb.PlanUsesLegacyCE,
+        sb.PspoRole,
+        sb.PspoParentQueryId,
+        sb.PspoVariantCount,
 
         CAST(NULL AS XML) AS [AI Prompt],   -- filled after the per-database loop
         CASE WHEN @AI <> 2 THEN CAST(
@@ -3304,6 +3370,21 @@ BEGIN
                                  N'EstimatedRows is not comparable across them, so the skew, memory-grant and ',
                                  N'IO-variance readings may be measuring a compat change rather than parameter ',
                                  N'sensitivity -- and PlanCount > 1 has an explanation unrelated to sniffing.', @NL)
+                     ELSE N'' END,
+                CASE WHEN sb.PspoRole = N'Variant'
+                     THEN CONCAT(CAST(N'' AS NVARCHAR(MAX)),
+                                 N'* THIS ROW IS ONE PARAMETER SENSITIVE PLAN VARIANT, not the whole statement. ',
+                                 N'The engine split this statement into ',
+                                 COALESCE(CONVERT(NVARCHAR(10), sb.PspoVariantCount), N'several'),
+                                 N' variants, one per cardinality range, because it found the predicate ',
+                                 N'skewed. So the engine ALREADY treats this statement as parameter sensitive: ',
+                                 N'the question is not whether to act, but whether this variant''s own plan is ',
+                                 N'right for its own range. Its siblings are the other rows sharing parent ',
+                                 N'query_id ', COALESCE(CONVERT(NVARCHAR(20), sb.PspoParentQueryId), N'(unknown)'),
+                                 N'. Plan-cache figures read Unavailable here by design -- a variant runs as a ',
+                                 N'prepared statement whose cache identity is not the procedure''s, so matching ',
+                                 N'one would be a guess. A recompile hint is usually the WRONG answer for a ',
+                                 N'variant: the engine is already doing what a hint would force.', @NL)
                      ELSE N'' END,
                 CASE WHEN sb.PlanUsesLegacyCE = 'Yes'
                      THEN CONCAT(CAST(N'' AS NVARCHAR(MAX)), N'* THIS PLAN WAS COMPILED BY THE LEGACY CARDINALITY ESTIMATOR (model 70)',

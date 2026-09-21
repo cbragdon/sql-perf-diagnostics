@@ -147,6 +147,27 @@ their `EstimatedRows` are not comparable with each other.
 `LegacyCEDatabaseSetting` describes the **analysed** database, not the utility
 database the procedure runs from.
 
+**6b. Parameter Sensitive Plan variants** -- `PspoRole`, `PspoParentQueryId`,
+`PspoVariantCount`. From compatibility level 160 the engine splits a
+parameterized statement whose predicate it judges skewed into a *dispatcher*
+plus one *query variant* per cardinality range, and each variant is a separate
+Query Store query carrying `object_id = 0`. `PspoRole = 'Variant'` means **this
+row is one bucket of a statement, not the whole statement**: its siblings are
+the other rows sharing its `PspoParentQueryId`, and `PspoVariantCount` says how
+many there are. NULL means no variant -- not 'No' -- which below level 160, or
+before SQL Server 2022, is the only possible answer.
+
+Two things follow. PSPO engaging is **corroboration**, not noise: the optimizer
+found the predicate skewed enough to compile separate plans for it, so the
+question stops being whether the statement is parameter sensitive and becomes
+whether each variant's plan suits its own range. A recompile hint is usually the
+wrong answer on a variant, because the engine is already doing what the hint
+would force. And every `CacheActual*` column reads Unavailable on a variant row
+**by design**: a variant executes as a prepared statement whose cached identity
+is not the procedure's, and all siblings share one `query_hash`, so any
+plan-cache match would hand over an arbitrary sibling's counters. Declining is
+deliberate, and the `[AI Prompt]` caveat says so.
+
 **7. The index recommendation** -- `TableSchemaRaw` / `TableNameRaw`,
 `TableRank`, and `AccessNodeId` / `AccessPhysicalOp` / `KeyScope` /
 `AccessPathsOnThisTable` (why the same table can appear on two rows -- two
