@@ -254,6 +254,24 @@ index: `'FPOC'` when the proposal also carries a filter, `'POC'` when it does no
 `NULL` when the driving plan has no `Sequence Project` / `Segment` /
 `Window Aggregate` operator.
 
+> **A hashed `GROUP BY` yields no grouping columns here, and that is the common case.**
+> Measured: a `Hash Match (Aggregate)` emits **no `<GroupBy>` element at all** -- it records its
+> grouping columns in `<HashKeysBuild>`, which this shred does not read. So a `GROUP BY` with no
+> `ORDER BY`, which the optimizer normally hashes, comes back with `missing_group_by_cols` NULL and
+> gets no realignment -- precisely the query that would benefit most.
+>
+> To surface the key you want, compile the statement once with **`OPTION (ORDER GROUP)`** under
+> `SET SHOWPLAN_XML ON` -- nothing executes -- and pass that plan to `@StatementPlanXml`. It is a
+> `GROUP BY` hint many T-SQL developers never meet: it forces sort-based aggregation, so the
+> grouping serializes as `<GroupBy>` where this shred can read it.
+>
+> **Use the hint to diagnose, not as the fix.** On its own it forces a Sort that was not there --
+> measured on a 121,317-row table, subtree cost **1.040 -> 1.283**, a 23% pessimization. Build the
+> realigned index instead: with it in place the same statement compiles to
+> `Stream Aggregate <- Index Seek`, no Sort, cost **0.054**, and that plan is **identical with and
+> without the hint**. The hint belongs in the throwaway compile that produces the plan you analyse,
+> not in the shipped statement.
+
 ---
 
 ## Step 3b -- the other result sets

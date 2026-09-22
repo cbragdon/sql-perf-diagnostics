@@ -74,10 +74,57 @@ OrderBy: ModifiedDate   Ascending=0     <- DESC
 OrderBy: OrderQty       Ascending=1
 ```
 
-`OPTION (ORDER GROUP)` let the optimizer satisfy the grouping and the final ordering with a single
-sort on `(ModifiedDate DESC, OrderQty)`, and the realigned key matches that exactly. Had the tool
-trusted the query text it would have produced a key in the wrong order and the Sort would have
-survived. **The plan is ground truth; the text is a description of intent.**
+The optimizer satisfied the grouping and the final ordering with a *single* sort on
+`(ModifiedDate DESC, OrderQty)` -- the ordering column leads because `GROUP BY` does not care what
+order its columns come in but `ORDER BY` does -- and the realigned key matches that exactly. Had
+the tool trusted the query text it would have produced a key in the wrong order and the Sort would
+have survived. **The plan is ground truth; the text is a description of intent.**
+
+> **About `OPTION (ORDER GROUP)`.** It forces sort-based aggregation (a Stream Aggregate) instead
+> of a Hash Match. It is *not* what produces the combined sort above: measured on this query, the
+> plan is byte-identical without it. It is here so the demo is reproducible, and that matters for a
+> reason worth knowing -- **a Hash Match (Aggregate) emits no `<GroupBy>` element at all**, recording
+> its grouping columns in `<HashKeysBuild>` instead, and the realign shred reads `<GroupBy>`. Forced
+> to hash, the same query yields `([LineTotal], [ModifiedDate] DESC)` -- correct as far as it goes,
+> but with the grouping column silently absent. If a realigned key looks like it has ignored your
+> `GROUP BY`, check whether the plan hashed.
+
+## If your own GROUP BY gets no realignment
+
+This query has an `ORDER BY`, which forces a sort the grouping can share, so it streams either way.
+Most grouping queries do not. A plain `GROUP BY` with no `ORDER BY` hashes -- and a hashed plan
+carries no `<GroupBy>`, so the tool sees no grouping columns and offers no realignment at all.
+
+`OPTION (ORDER GROUP)` is the way to see what you are missing. Measured on this table:
+
+| | plan | Sorts | subtree cost | grouping visible? |
+|---|---|---|---|---|
+| no hint, no index | `Hash Match <- Scan` | 0 | 1.040 | **no** |
+| `OPTION (ORDER GROUP)` | `Stream Aggregate <- Sort <- Scan` | 1 | 1.283 | yes |
+| no hint, realigned index built | `Stream Aggregate <- Index Seek` | 0 | **0.054** | yes |
+| `ORDER GROUP` + that index | *identical to the row above* | 0 | 0.054 | yes |
+
+Read the second and third rows together. The hint **on its own is a pessimization** -- it forces a
+Sort that was not there, costing 23% here. The index is the fix, and it is 19x cheaper than the
+hash plan. And once the index exists the hint does nothing at all: rows three and four are the same
+plan to the digit, because the index already delivers the rows in order.
+
+So use it as a diagnostic and take it back out:
+
+```sql
+SET SHOWPLAN_XML ON;   -- nothing executes; this only compiles
+GO
+SELECT OrderQty, ModifiedDate, COUNT_BIG(*) AS n
+FROM   dbo.YourTable
+WHERE  SomeColumn = 4.99
+GROUP  BY OrderQty, ModifiedDate
+OPTION (ORDER GROUP);  -- forces a Stream Aggregate, so the plan records <GroupBy>
+GO
+SET SHOWPLAN_XML OFF;
+```
+
+Pass that plan to `usp_IndexAnalysis @StatementPlanXml = N'<the plan>'`, read the realigned key,
+build it -- then drop the hint. The shipped statement never needs it.
 
 ## Two impact numbers, two different scales
 
