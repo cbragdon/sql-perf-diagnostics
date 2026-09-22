@@ -1,0 +1,18 @@
+THIRD-PARTY COMPONENTS
+======================
+
+This project is licensed under the MIT License; see LICENSE.
+
+plan_extract.py
+---------------
+
+plan_extract.py is Erik Darling's extract.py, vendored verbatim under the MIT
+License. It is not this project's work and is not covered by this project's
+copyright.
+
+Its own copyright notice and licence text are in LICENSE-plan_extract.txt, which
+must travel with it -- the MIT License requires that notice to be preserved in
+any copy or substantial portion of the software.
+
+The MIT grant in LICENSE covers this project's own code. plan_extract.py is
+covered by LICENSE-plan_extract.txt.

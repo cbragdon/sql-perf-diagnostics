@@ -380,4 +380,4 @@ nothing here should be read as their endorsement.**
 
 ## Licence
 
-MIT. See `LICENSE`. `plan_extract.py` is separately covered by `LICENSE-plan_extract.txt`.
+MIT. See `LICENSE`. `plan_extract.py` is vendored and separately covered by `LICENSE-plan_extract.txt`, which must travel with it; `NOTICE` records that.
