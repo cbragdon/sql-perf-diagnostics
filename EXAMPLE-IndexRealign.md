@@ -41,11 +41,24 @@ python ComparePlans_v1.py --single realign_demo_both.sqlplan \
    it comes with a reconstructed `CREATE` so the drop is reversible.
 2. **The proposal from the missing-index DMVs:** key `[LineTotal]`, `INCLUDE (OrderQty,
    ModifiedDate)`, impact 2604.32. Correct as far as it goes -- it covers the query and removes
-   the lookup.
+   the lookup. What it cannot be is complete: the optimizer builds these from a query's *filters*
+   and *output columns* only, so `ORDER BY` and `GROUP BY` never enter into it. The impact figure
+   is cumulative across every execution the DMV has seen, which is also why it resets when the
+   instance restarts, and when any `CREATE` or `DROP INDEX` touches this table.
 3. **`query_id(s): 1447` -- which query asked for it.** This is the Query Store bridge, and it is
    the thing that makes the correction below possible: without knowing the driving query, there is
-   no way to know what it sorts by. `sp_BlitzIndex` has no equivalent, because it does not read
-   Query Store at all.
+   no way to know what it sorts by.
+
+   Worth being precise about what is and is not novel here, because the obvious claim would be
+   wrong. `sp_BlitzIndex` reads the same missing-index DMVs, and on SQL Server 2019+ it uses the
+   very same `sys.dm_db_missing_index_group_stats_query` DMF to attach a *sample query plan* to a
+   proposal. The difference is where the link lands. Its route runs through
+   `sys.dm_exec_query_stats` -- the **plan cache** -- and a cached plan is invalidated by any
+   `CREATE` or `DROP INDEX` on the table, which is exactly the action you are weighing up, as well
+   as by a restart. The `query_id` above is a **Query Store** identity: it survives all of that,
+   and it names a *stored* plan, which is what can still be shredded for the Sort that the
+   realignment below is built from. (Checked against the installed procedure, not from
+   documentation: neither Blitz procedure references Query Store anywhere.)
 4. **The DMV's own `CREATE`, verbatim.** Build this and the key lookup disappears. The
    `GROUP BY` and `ORDER BY` still need a Sort, because nothing in the suggestion addresses them.
 5. **`REALIGN` -- the same three columns, reordered.**
