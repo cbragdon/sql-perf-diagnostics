@@ -19,8 +19,7 @@ BEGIN
     FROM     dbo.RealignDemo
     WHERE    LineTotal = @lt          -- equality filter
     GROUP BY OrderQty, ModifiedDate   -- grouping
-    ORDER BY ModifiedDate DESC        -- and a final order
-    OPTION (ORDER GROUP);
+    ORDER BY ModifiedDate DESC;       -- and a final order
 END;
 ```
 
@@ -43,7 +42,7 @@ python ComparePlans_v1.py --single realign_demo_both.sqlplan \
 2. **The proposal from the missing-index DMVs:** key `[LineTotal]`, `INCLUDE (OrderQty,
    ModifiedDate)`, impact 2604.32. Correct as far as it goes -- it covers the query and removes
    the lookup.
-3. **`query_id(s): 1472` -- which query asked for it.** This is the Query Store bridge, and it is
+3. **`query_id(s): 1447` -- which query asked for it.** This is the Query Store bridge, and it is
    the thing that makes the correction below possible: without knowing the driving query, there is
    no way to know what it sorts by. `sp_BlitzIndex` has no equivalent, because it does not read
    Query Store at all.
@@ -80,22 +79,20 @@ order its columns come in but `ORDER BY` does -- and the realigned key matches t
 the tool trusted the query text it would have produced a key in the wrong order and the Sort would
 have survived. **The plan is ground truth; the text is a description of intent.**
 
-> **About `OPTION (ORDER GROUP)`.** It forces sort-based aggregation (a Stream Aggregate) instead
-> of a Hash Match. It is *not* what produces the combined sort above: measured on this query, the
-> plan is byte-identical without it. It is here so the demo is reproducible, and that matters for a
-> reason worth knowing -- **a Hash Match (Aggregate) emits no `<GroupBy>` element at all**, recording
-> its grouping columns in `<HashKeysBuild>` instead, and the realign shred reads `<GroupBy>`. Forced
-> to hash, the same query yields `([LineTotal], [ModifiedDate] DESC)` -- correct as far as it goes,
-> but with the grouping column silently absent. If a realigned key looks like it has ignored your
-> `GROUP BY`, check whether the plan hashed.
-
 ## If your own GROUP BY gets no realignment
 
-This query has an `ORDER BY`, which forces a sort the grouping can share, so it streams either way.
-Most grouping queries do not. A plain `GROUP BY` with no `ORDER BY` hashes -- and a hashed plan
-carries no `<GroupBy>`, so the tool sees no grouping columns and offers no realignment at all.
+Nothing above used a query hint, and that matters: the realignment you just saw is what plain
+T-SQL produces. It works here because the query's own `ORDER BY` forces a sort that the grouping
+can share, so the optimizer uses a Stream Aggregate and records the grouping columns in the plan
+as `<GroupBy>`, where the tool can read them.
 
-`OPTION (ORDER GROUP)` is the way to see what you are missing. Measured on this table:
+Most grouping queries have no `ORDER BY`. Those hash -- and a `Hash Match (Aggregate)` writes **no
+`<GroupBy>` at all**, keeping its grouping columns in `<HashKeysBuild>` instead. The tool then sees
+no grouping, and offers no realignment. (ComparePlans flags exactly this as
+`HASH_AGG_HIDES_GROUPING`, so you are told rather than left wondering.)
+
+`OPTION (ORDER GROUP)` is how you see what you are missing -- as a diagnostic, not as a fix.
+Measured on this table:
 
 | | plan | Sorts | subtree cost | grouping visible? |
 |---|---|---|---|---|
