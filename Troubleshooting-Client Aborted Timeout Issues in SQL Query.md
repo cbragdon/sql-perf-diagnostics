@@ -195,10 +195,10 @@ Three things to settle before the team starts using it:
 
 The column is populated on **every** row, always, so a blank cell means something is wrong rather
 than "nothing to say about this one". `@AI = 0` turns generation off while still emitting the
-column, so the result-set shape never changes. `@AI = 1` exists in Brent Ozar's `sp_BlitzCache`,
-where it calls the AI provider's API from inside SQL Server — it is deliberately **not** implemented
-here and will abort if you set it, because it would mean storing a provider API key in a
-database-scoped credential.
+column, so the result-set shape never changes. `@AI = 1` is deliberately **not** implemented and
+will abort if you set it. That mode would mean calling an AI provider's API from inside SQL Server,
+which requires storing a provider API key in a database-scoped credential — against this toolset's
+no-stored-credentials rule.
 
 ## Reading the Finders' Output
 

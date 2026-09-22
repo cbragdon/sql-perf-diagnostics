@@ -103,8 +103,8 @@ CREATE OR ALTER PROCEDURE dbo.usp_IndexAnalysis
     @RealignLowUsagePercent       DECIMAL(6,2)  = 5.0,
     @SeqKeyMinPageLatchWaits      BIGINT        = 10000,
     @WriteHeavyReadsPerWrite      DECIMAL(9,3)  = 0.10,
-    /*  Tier 2 (2026-09-13): lock-wait and heap cons. 300,000 ms = 5 minutes is sp_BlitzIndex
-        check 11's own number; the two heap thresholds mirror its "> 0".                          */
+    /*  Tier 2 (2026-09-13): lock-wait and heap cons. 300,000 ms = 5 minutes is the warning
+        threshold for accumulated lock wait; the two heap thresholds fire on any at all.          */
     @LockWaitTotalMsWarn          BIGINT        = 300000,
     @HeapForwardedFetchWarn       BIGINT        = 1,
     @HeapDeleteWarn               BIGINT        = 1,
@@ -1256,9 +1256,9 @@ CROSS APPLY (
            SUM(CASE WHEN c.collation_name IS NOT NULL
                          AND c.collation_name <> CONVERT(NVARCHAR(128), DATABASEPROPERTYEX(DB_NAME(), ''Collation''))
                     THEN 1 ELSE 0 END)                        AS collation_mismatch_columns,
-           /*  sp_BlitzIndex check 70. Counted over ALL of sys.columns, not the clustered index''s
-               own column list the way theirs does -- is_replicated is a COLUMN property, so a heap
-               or a narrow clustered key would otherwise understate it. See the script Section 3b.  */
+           /*  Replicated columns. Counted over ALL of sys.columns, not over the clustered
+               index column list -- is_replicated is a COLUMN property, so a heap or a narrow
+               clustered key would otherwise understate it. See the script Section 3b.             */
            SUM(CASE WHEN c.is_replicated = 1 THEN 1 ELSE 0 END) AS replicated_columns
     FROM   sys.columns c
     JOIN   sys.types   t ON t.user_type_id = c.system_type_id
@@ -1427,7 +1427,7 @@ WHERE  i.type IN (0, 1, 2)
         EXEC sys.sp_executesql @Sql, N'@InnerIn NVARCHAR(MAX), @CPS BIT',
              @InnerIn = @Inner, @CPS = @ConsolidatePartitionStats;
 
-        /*  4d. #FilterColumnGap -- sp_BlitzIndex check 34. A filtered index whose WHERE names a
+        /*  4d. #FilterColumnGap -- a filtered index whose WHERE names a
             column the index does not contain. Detected through sys.sql_expression_dependencies
             (referencing_class 7 = INDEX, referencing_minor_id = index_id, referenced_minor_id =
             column_id), NOT by parsing filter_definition text -- see the script's Section 4b header
@@ -1471,7 +1471,7 @@ WHERE  i.has_filter = 1
         SET @Sql = @Use + N'EXEC sys.sp_executesql @InnerIn;';
         EXEC sys.sp_executesql @Sql, N'@InnerIn NVARCHAR(MAX)', @InnerIn = @Inner;
 
-        /*  4e. #HypotheticalIndex -- sp_BlitzIndex check 41, Database Engine Tuning Advisor
+        /*  4e. #HypotheticalIndex -- Database Engine Tuning Advisor
             leftovers. Collected on its own because #IndexColumns / #IndexMeta both exclude
             is_hypothetical, and #IndexMeta could not carry one anyway: its CROSS APPLY to
             sys.dm_db_partition_stats finds ZERO rows for a hypothetical index, so the row would be
@@ -2957,9 +2957,9 @@ WHERE  c.object_id IN (SELECT DISTINCT ia.object_id FROM #IndexAnalysis ia);';
 
     /*------------------------------------------------------------------------------------------------
       12g. TABLE-LEVEL STRUCTURAL FINDINGS -> row_kind = 'TABLE'. See the script's Section 12g header
-      for each token and for why sp_BlitzIndex's include-usage checks (30/31) are deliberately NOT
-      here: they GROUP BY database_name, so a per-table version fired on 57 of 65 tables -- noise,
-      not a finding. A TABLE row is emitted ONLY when at least one finding fires.
+      for each token and for why a per-table "unused INCLUDE columns" finding is deliberately
+      NOT here: the question is only meaningful per DATABASE, and a per-table form fired on 57 of
+      65 tables -- noise, not a finding. A TABLE row is emitted ONLY when at least one finding fires.
     ------------------------------------------------------------------------------------------------*/
     ;WITH nc AS (
         SELECT object_id,

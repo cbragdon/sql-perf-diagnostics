@@ -49,16 +49,13 @@ python ComparePlans_v1.py --single realign_demo_both.sqlplan \
    the thing that makes the correction below possible: without knowing the driving query, there is
    no way to know what it sorts by.
 
-   Worth being precise about what is and is not novel here, because the obvious claim would be
-   wrong. `sp_BlitzIndex` reads the same missing-index DMVs, and on SQL Server 2019+ it uses the
-   very same `sys.dm_db_missing_index_group_stats_query` DMF to attach a *sample query plan* to a
-   proposal. The difference is where the link lands. Its route runs through
-   `sys.dm_exec_query_stats` -- the **plan cache** -- and a cached plan is invalidated by any
-   `CREATE` or `DROP INDEX` on the table, which is exactly the action you are weighing up, as well
-   as by a restart. The `query_id` above is a **Query Store** identity: it survives all of that,
-   and it names a *stored* plan, which is what can still be shredded for the Sort that the
-   realignment below is built from. (Checked against the installed procedure, not from
-   documentation: neither Blitz procedure references Query Store anywhere.)
+   The missing-index DMVs cannot tell you this on their own. On SQL Server 2019+
+   `sys.dm_db_missing_index_group_stats_query` will link a proposal to a query, but it gets you
+   only as far as the **plan cache** -- and a cached plan is invalidated by any `CREATE` or
+   `DROP INDEX` on the table, which is exactly the change you are weighing up, as well as by a
+   restart or memory pressure. A Query Store `query_id` survives all of that, and it names a
+   *stored* plan, which is what can still be shredded for the Sort the realignment below is built
+   from.
 4. **The DMV's own `CREATE`, verbatim.** Build this and the key lookup disappears. The
    `GROUP BY` and `ORDER BY` still need a Sort, because nothing in the suggestion addresses them.
 5. **`REALIGN` -- the same three columns, reordered.**

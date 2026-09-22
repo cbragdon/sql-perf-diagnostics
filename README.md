@@ -100,12 +100,30 @@ answers a question nothing else here asks, and ComparePlans never touches a serv
 
 ## What makes this different from the tools you already have
 
-The Query Store correlation. `sp_BlitzCache` and `sp_BlitzIndex` are excellent and this is not a
-replacement for either -- but neither reads Query Store at all (verified against their source:
-`grep -c query_store` returns 0 in both). Their evidence therefore dies with the plan cache, which
-a restart, a `CREATE INDEX`, or memory pressure empties. Query Store survives all three, so a
-drop-index recommendation here is weighed against what actually ran over days, not over whatever
-happens to be cached right now.
+The correlation. Everything here is built on evidence SQL Server already collects -- the value
+added is joining it up, because each native source holds one piece and none of them points at
+another:
+
+- **`sys.dm_db_missing_index_details`** and its group / stats siblings propose an index, but from
+  a query's *filters* and *output columns* only. They never see `ORDER BY` or `GROUP BY`, so the
+  suggestion can remove a key lookup and leave a Sort standing.
+- **`sys.dm_db_index_usage_stats`** will tell you an index is unread -- and resets on restart, so
+  a recently bounced instance manufactures that silence out of nothing. Acting on it without
+  checking uptime is how a useful index gets dropped.
+- **The plan cache** (`sys.dm_exec_query_stats`, `sys.dm_exec_query_plan`) holds the plans, and
+  loses them to a restart, to memory pressure, and to any `CREATE` or `DROP INDEX` on the very
+  table you are analysing.
+- **Query Store** keeps durable history across all of that, but nothing in it points back at an
+  index recommendation.
+
+So a missing-index proposal is bridged to the Query Store query that actually drove it
+(`sys.dm_db_missing_index_group_stats_query` on 2019+, the plan's own `<MissingIndexes>` node
+before that); that query's *stored* plan is shredded for the Sort it really performs; and the
+proposed key is reordered so the Sort goes as well as the lookup. A drop recommendation is
+weighed against what ran over days rather than whatever happens to be cached right now, and
+against every object that depends on the table -- including the ones that have not run lately.
+Nothing is applied for you: every `CREATE` and `DROP` is commented-out text with its own
+rollback.
 
 ## Tested at every compatibility level the engine supports
 
@@ -308,8 +326,7 @@ work. Named individually, in alphabetical order, because each shaped a specific 
   [*SQL Server Execution Plans*, 3rd edition](https://www.red-gate.com/simple-talk/featured/sql-server-execution-plans-third-edition-by-grant-fritchey/),
   free from Redgate; [The Scary DBA](https://www.scarydba.com/). Also co-author, with Jason Strate,
   of the second edition of *Expert Performance Indexing in SQL Server* -- see below.
-- **Brent Ozar Unlimited** -- the diagnostic stance the toolset takes, and `sp_BlitzCache` /
-  `sp_BlitzIndex` as the reference it was measured against rather than copied from. Also parameter
+- **Brent Ozar Unlimited** -- the diagnostic stance the toolset takes. Also parameter
   sniffing over skewed data, and the 201-bucket ceiling on a statistics histogram -- which is why
   `usp_TippingPointAnalysis` reads `sys.dm_db_stats_histogram` directly and reports
   `HistogramSkewRatio` and the heaviest value, instead of trusting a density average to describe an
@@ -355,9 +372,8 @@ nothing here should be read as their endorsement.**
   **no code of his appears here** -- the design was referenced, nothing was copied. The Query Store
   correlation layer, the byte-width guard, the dependent-object analysis and the statement-plan
   intake have no equivalent in his tool.
-- The comparison with `sp_BlitzCache` / `sp_BlitzIndex` above was made by reading their source, not
-  their documentation. Both are Brent Ozar Unlimited's, under their own licence; nothing of theirs
-  is included or required here.
+- Brent Ozar Unlimited's First Responder Kit is under its own licence. Nothing of theirs is
+  included here, and nothing here requires it.
 - "POC" (Partitioning, Ordering, Covering) is **Itzik Ben-Gan's** term for the window-function index
   pattern. "FPOC" -- prepending the filter -- is this project's own extension and should not be
   attributed to him.
