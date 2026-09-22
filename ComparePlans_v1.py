@@ -497,6 +497,33 @@ class LoadedPlan:
                 objs = _leaf_objects(n)
                 self.nonsargable.append((objs[0][0] if objs else "(table)", pred, n.actual_rows))
 
+        # A hashed GROUP BY hides what it groups by. Measured on a captured plan: a
+        # Hash Match with LogicalOp="Aggregate" puts the grouping columns in
+        # <HashKeysBuild> and the plan carries NO <GroupBy> element anywhere -- only a
+        # Stream Aggregate writes one. Anything that shreds <GroupBy> to rebuild an
+        # index key (usp_IndexAnalysis's realign shred) is blind to the grouping here.
+        self.hash_agg_grouping = []
+        # NB descendant search: <GroupBy> is a child of <StreamAggregate>/<Segment>,
+        # not of the RelOp, so a direct find() here silently never matches.
+        if not any(n.el.find(".//" + NS + "GroupBy") is not None for n in self.nodes):
+            for n in self.nodes:
+                # The physical-op half is belt-and-braces and provably redundant: a
+                # Stream Aggregate has no <Hash>, and a Hash Match JOIN's LogicalOp is a
+                # join, so "Aggregate" + <HashKeysBuild> already implies a hash aggregate.
+                # Disclosed because a mutant dropping it survives the whole suite -- there
+                # is no plan shape that can pin it, so it is not separately tested.
+                if n.physical != "Hash Match" or "Aggregate" not in n.logical:
+                    continue
+                h = n.el.find(NS + "Hash")
+                hk = h.find(NS + "HashKeysBuild") if h is not None else None
+                if hk is None:
+                    continue
+                cols = [c.get("Column") for c in hk.findall(NS + "ColumnReference")
+                        if c.get("Column")]
+                if cols:
+                    self.hash_agg_grouping = cols
+                    break
+
         # eager INDEX spool (not table spool) + the permanent index that removes it
         self.eager_spool = None
         for n in self.nodes:
@@ -1027,6 +1054,21 @@ def detect_antipatterns(plans):
                           f"like-for-like.",
             })
 
+    # A HINT is always the last thing to try, so this advisory is appended after every
+    # other detection -- recommend() walks the list in order, so it lands last in the
+    # RECOMMENDATIONS a reader sees. It is not a defect in the query; it says the plan
+    # does not expose what the query groups by, which is why no realigned index appears.
+    for p in plans:
+        if p.hash_agg_grouping:
+            cols = ", ".join(p.hash_agg_grouping)
+            out.append({
+                "code": "HASH_AGG_HIDES_GROUPING", "scope": p.label,
+                "detail": f"'{p.label}': the GROUP BY is done by a Hash Match, which keeps its "
+                          f"grouping columns ({cols}) as hash keys and writes no <GroupBy> into "
+                          f"the plan -- so a tool reading this plan cannot tell what the query "
+                          f"groups by, and cannot suggest an index key that would serve it.",
+            })
+
     seen, deduped = set(), []
     for d in out:
         k = (d["code"], d["scope"], d["detail"])
@@ -1182,6 +1224,24 @@ def _poc_index_from_plan(plan, fillfactor=DEFAULT_FILLFACTOR):
 
 # code -> {headline, fix, caveat}.  The dict is the source of truth for the catalog doc.
 RECOMMENDATIONS = {
+    "HASH_AGG_HIDES_GROUPING": {
+        "headline": "The GROUP BY is hashed, so index tools cannot see what it groups by",
+        "fix": "Nothing here is wrong with the query -- this is about getting a good index "
+               "suggestion for it. In order: (1) build the index the missing-index suggestion "
+               "proposes, if there is one, and re-capture the plan -- once the rows arrive in "
+               "order the optimizer usually switches to a Stream Aggregate on its own, and the "
+               "grouping becomes visible; (2) if the query is supposed to return sorted rows, "
+               "add the ORDER BY it needs, which often produces that same shape; (3) LAST "
+               "RESORT, and only to look -- compile it once with OPTION (ORDER GROUP) under "
+               "SET SHOWPLAN_XML ON (nothing executes) and pass that plan to "
+               "usp_IndexAnalysis @StatementPlanXml. That hint forces a Stream Aggregate, so "
+               "the grouping columns become readable and you get the realigned index to build.",
+        "caveat": "If you use the hint, take it back out again -- it is a way to SEE the index "
+                  "you need, not the fix. On its own it forces a sort that was not there and "
+                  "makes the query slower; once the index exists it changes nothing. And a hash "
+                  "aggregate is often the right choice, so this is a note about what the tooling "
+                  "can read, not a fault to correct.",
+    },
     "LOOKUP_EXPLOSION": {
         "headline": "Key/RID lookups are the cost -- cover the query or stop reusing a selective plan",
         "fix": "Add a covering index so the lookup's columns are in the index, or -- if this is one "
