@@ -836,6 +836,9 @@ BEGIN
         object_id           INT           NOT NULL,
         order_by_cols       NVARCHAR(MAX) NULL,       /* 11-shape: outermost result Sort, this table's columns, ` DESC` kept */
         group_by_cols       NVARCHAR(MAX) NULL,       /* 11-shape: first GroupBy, this table's columns, alphabetical */
+        group_input_sorted  BIT           NULL,       /* 11-shape: a Sort on this table's columns sits under that GroupBy's
+                                                         operator -- 0 = its input was already ordered (nothing for a
+                                                         realigned key to remove); Section 13b reads it */
         has_window_op       BIT           NULL,       /* 11-shape; NULL = requested, not yet shredded */
         PRIMARY KEY (evidence_id, object_id)
     );
@@ -2531,15 +2534,22 @@ WHERE  x.object_id IN (SELECT d.dependent_object_id FROM #DependentObject d WHER
         USE [target]) and returns NULL. @Column is unbracketed in showplan, so QUOTENAME it to match
         key_columns_display; ` DESC` from @Ascending false/0; expression / parameter keys (Expr%, @%)
         skipped; non-Distinct Sorts only. And whether a window operator -- Sequence Project
-        (ranking), Segment (row-mode window aggregate) or Window Aggregate -- is anywhere in it.   */
+        (ranking), Segment (row-mode window aggregate) or Window Aggregate -- is anywhere in it.
+        group_input_sorted (2026-10-25): whether ANY Sort on this table's columns sits beneath that
+        first GroupBy's operator. A <GroupBy> is only written by an operator that consumes ordered
+        input (Stream Aggregate, Segment), so when no such Sort is there the order already came from
+        an index and a realigned key has no Sort / aggregate to remove -- Section 13b then withholds
+        it. Measured on Sales.SalesOrderDetail: Stream Aggregate fed straight by the clustered scan.  */
     ;WITH XMLNAMESPACES (DEFAULT 'http://schemas.microsoft.com/sqlserver/2004/07/showplan')
     UPDATE s
-    SET    order_by_cols = ob.cols,
-           group_by_cols = gb.cols,
-           has_window_op = wf.present
+    SET    order_by_cols      = ob.cols,
+           group_by_cols      = gb.cols,
+           group_input_sorted = gs.present,
+           has_window_op      = wf.present
     FROM   #PlanTableShape s
     JOIN   #PlanEvidence pe ON pe.evidence_id = s.evidence_id
     JOIN   #TableMeta tm ON tm.object_id = s.object_id
+    CROSS APPLY (SELECT QUOTENAME(tm.table_name) AS qt, QUOTENAME(tm.schema_name) AS qs) tq
     CROSS APPLY (SELECT STUFF((
                     SELECT N', ' + QUOTENAME(oc.n.value('(ColumnReference/@Column)[1]', 'NVARCHAR(300)'))
                            + CASE WHEN oc.n.value('@Ascending', 'NVARCHAR(10)') IN (N'false', N'0') THEN N' DESC' ELSE N'' END
@@ -2559,6 +2569,8 @@ WHERE  x.object_id IN (SELECT d.dependent_object_id FROM #DependentObject d WHER
                     WHERE  g.col IS NOT NULL AND g.col NOT LIKE N'Expr%' AND g.col NOT LIKE N'@%'
                     ORDER  BY g.col
                     FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, N'') AS cols) gb
+    CROSS APPLY (SELECT pe.plan_xml.exist('(//GroupBy)[1]/../..//Sort/OrderBy/OrderByColumn/ColumnReference
+                                               [@Table = sql:column("tq.qt") and @Schema = sql:column("tq.qs")]') AS present) gs
     CROSS APPLY (SELECT CASE WHEN pe.plan_xml.exist('//RelOp[@PhysicalOp = "Sequence Project"
                                                           or @PhysicalOp = "Segment"
                                                           or @PhysicalOp = "Window Aggregate"]') = 1
@@ -3329,9 +3341,27 @@ WHERE  c.object_id IN (SELECT DISTINCT ia.object_id FROM #IndexAnalysis ia);';
       locator a nonclustered index carries implicitly). Skipping that trim can leave one redundant,
       but never WRONG, explicit key column. NULL when there is nothing to realign: no GROUP BY / ORDER
       BY on this proposal, or the realigned key would come out identical to the DMV's own key.
+
+      WITHHELD OR QUALIFIED (Curtis, 2026-10-25: "I shouldn't have recommended that SalesOrderID
+      should be the key column in the realigned index since SalesOrderID is the key column of the
+      clustered index"). Reproduced on AdventureWorks2019 Sales.SalesOrderDetail, GROUP BY
+      SalesOrderID with UnitPrice > 100: the realigned (SalesOrderID) INCLUDE (LineTotal, UnitPrice)
+      read 591 pages against the DMV key's 260 and removed nothing. Three checks, in this order:
+        1. NOTHING TO REMOVE -- a GROUP BY-only proposal whose driving plan has no Sort on this
+           table under the aggregate (#PlanTableShape.group_input_sorted = 0): the aggregate already
+           received ordered rows, so a realigned key cannot take a Sort away. Withheld.
+        2. CLUSTERED ORDER -- the realigned key is the clustered index's key or a leading prefix of
+           it, same directions: a clustered scan already delivers this order, and the nonclustered
+           copy only narrows the scan. Withheld, naming the clustered index.
+        3. RANGE DEMOTED -- an inequality column moved to INCLUDE: still proposed, but with a
+           TRADE-OFF note, because the realigned key gives up the seek the DMV key had and reads
+           every row instead. Which wins depends on that range's selectivity; measure both.
+      A withheld proposal keeps a "-- REALIGN not proposed: <reason>" line in the column, not NULL,
+      so the reader sees why. A trailing clustered-key column is still not trimmed (see above).
     ------------------------------------------------------------------------------------------------*/
     IF OBJECT_ID('tempdb..#Realign') IS NOT NULL DROP TABLE #Realign;
-    CREATE TABLE #Realign (analysis_id INT NOT NULL, realign_sql NVARCHAR(MAX) NULL);
+    CREATE TABLE #Realign (analysis_id INT NOT NULL, realign_sql NVARCHAR(MAX) NULL,
+                           key_text NVARCHAR(MAX) NULL, inc_text NVARCHAR(MAX) NULL);
 
     ;WITH KeySrc AS (
         -- F -> P -> O, each column split from its comma list with its ORIGINAL order preserved (the
@@ -3407,8 +3437,8 @@ WHERE  c.object_id IN (SELECT DISTINCT ia.object_id FROM #IndexAnalysis ia);';
         FROM   IncSrc
         GROUP  BY analysis_id, bare_name
     )
-    INSERT #Realign (analysis_id, realign_sql)
-    SELECT k.analysis_id,
+    INSERT #Realign (analysis_id, key_text, inc_text, realign_sql)
+    SELECT k.analysis_id, keylist.key_text, inclist.inc_text,
            CONCAT(CAST(N'-- ' AS NVARCHAR(MAX)), N'REALIGN -- CREATE INDEX ',
                   /*  Name derived from the REALIGNED key/include text itself (same CHECKSUM-suffix
                       technique the base gen.name uses above) -- NOT from k.analysis_id, an IDENTITY
@@ -3469,6 +3499,56 @@ WHERE  c.object_id IN (SELECT DISTINCT ia.object_id FROM #IndexAnalysis ia);';
     WHERE keylist.key_text IS NOT NULL
       AND keylist.key_text <> COALESCE(k.key_columns_display, N'');
 
+    /*  The three checks from the header. ck.key_text uses the same QUOTENAME + ' DESC' rendering as
+        keylist above, so the prefix test is a plain string compare (LEFT, not LIKE: the brackets in
+        a quoted name are LIKE wildcards). A NULL group_input_sorted (shape not shredded) never
+        withholds -- unknown is not "nothing to remove".                                          */
+    UPDATE r
+    SET    realign_sql =
+           CASE WHEN ia.missing_order_by_cols IS NULL
+                 AND ia.missing_group_by_cols IS NOT NULL
+                 AND sh.group_input_sorted = 0
+                THEN CONCAT(CAST(N'-- REALIGN not proposed: ' AS NVARCHAR(MAX)),
+                            N'the driving plan''s aggregate on ', ia.missing_group_by_cols,
+                            N' already received ordered rows (no Sort under it), so a key reordered for the GROUP BY ',
+                            N'has no Sort / aggregate to remove. Use create_index_sql, which seeks the filter.')
+                WHEN ck.key_text IS NOT NULL
+                 AND (ck.key_text = r.key_text OR LEFT(ck.key_text, LEN(r.key_text) + 2) = r.key_text + N', ')
+                THEN CONCAT(CAST(N'-- REALIGN not proposed: key (' AS NVARCHAR(MAX)), r.key_text,
+                            N') is ', CASE WHEN ck.key_text = r.key_text THEN N'the key' ELSE N'a leading prefix of the key' END,
+                            N' of clustered index ', QUOTENAME(ck.index_name), N' (', ck.key_text,
+                            N'), which already delivers this order; a nonclustered copy would only narrow the scan. ',
+                            N'Use create_index_sql, which seeks the filter.')
+                WHEN dm.demoted IS NOT NULL
+                THEN CONCAT(r.realign_sql,
+                            N' ; TRADE-OFF: range column(s) ', dm.demoted, N' moved to INCLUDE, so this key cannot seek ',
+                            N'them and reads every row in its leading-key range, where create_index_sql seeks them. Prefer this ',
+                            N'one only if the Sort / aggregate it removes costs more than the rows that range filters out -- ',
+                            N'compare both in an actual plan.')
+                ELSE r.realign_sql END
+    FROM   #Realign r
+    JOIN   #IndexAnalysis ia ON ia.analysis_id = r.analysis_id
+    OUTER APPLY (SELECT MAX(CONVERT(TINYINT, s.group_input_sorted)) AS group_input_sorted
+                 FROM   #MissingIndex mi
+                 JOIN   #PlanTableShape s ON s.evidence_id = mi.driving_evidence_id AND s.object_id = mi.object_id
+                 WHERE  mi.missing_index_id = CASE WHEN ia.index_name LIKE N'<<missing #%>>'
+                                                   THEN CONVERT(INT, REPLACE(REPLACE(ia.index_name, N'<<missing #', N''), N'>>', N'')) END) sh
+    OUTER APPLY (SELECT (SELECT MIN(im.index_name) FROM #IndexMeta im
+                         WHERE im.object_id = ia.object_id AND im.index_id = 1) AS index_name,
+                        STUFF((SELECT N', ' + QUOTENAME(ic.column_name) + CASE WHEN ic.is_descending_key = 1 THEN N' DESC' ELSE N'' END
+                               FROM   #IndexColumns ic
+                               WHERE  ic.object_id = ia.object_id AND ic.index_id = 1
+                                 AND  ic.is_included = 0 AND ic.key_ordinal > 0
+                               ORDER  BY ic.key_ordinal
+                               FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, N'') AS key_text) ck
+    OUTER APPLY (SELECT STUFF((SELECT N', ' + QUOTENAME(b.bare_name)
+                               FROM  (SELECT REPLACE(REPLACE(LTRIM(RTRIM(q.i.value('.','NVARCHAR(400)'))), N'[', N''), N']', N'') AS bare_name
+                                      FROM   (SELECT CAST(N'<i>' + REPLACE(ia.inequality_columns, N',', N'</i><i>') + N'</i>' AS XML) AS x) qx
+                                      CROSS APPLY qx.x.nodes('i') AS q(i)) b
+                               WHERE  CHARINDEX(N', ' + QUOTENAME(b.bare_name) + N',', N', ' + ISNULL(r.inc_text, N'') + N',') > 0
+                               FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, N'') AS demoted
+                 WHERE  ia.inequality_columns IS NOT NULL) dm;
+
     UPDATE ia
     SET    realigned_create_index_sql = r.realign_sql
     FROM   #IndexAnalysis ia
@@ -3509,7 +3589,9 @@ WHERE  c.object_id IN (SELECT DISTINCT ia.object_id FROM #IndexAnalysis ia);';
             ia.analysis_id,
             (SELECT TOP (1) qb.match_method
              FROM #QsMissingBridge qb
-             WHERE qb.missing_index_id = TRY_CONVERT(INT, REPLACE(REPLACE(ia.index_name, N'<<missing #', N''), N'>>', N'')))
+             /* TRY_CAST, not TRY_CONVERT: TRY_CONVERT is not recognized below compat 110, so it failed
+                the install in a compat-100 host database (found by the 2026-10-25 compat matrix). */
+             WHERE qb.missing_index_id = TRY_CAST(REPLACE(REPLACE(ia.index_name, N'<<missing #', N''), N'>>', N'') AS INT))
         FROM #IndexAnalysis ia;
 
         INSERT #DropRiskResults

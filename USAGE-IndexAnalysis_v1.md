@@ -221,6 +221,24 @@ captured before that date still decodes.
 The generated statement, as a `-- ` line comment. Copy it, remove the `-- `,
 review it, run it yourself. The script never executes DDL.
 
+### `realigned_create_index_sql`
+
+`MISSING` rows only: a second shape for the same proposal, with the key reordered
+equality -> `GROUP BY` -> `ORDER BY` so the driving query's Sort goes away too.
+NULL when the proposal has no `GROUP BY` / `ORDER BY` shape. Three checks run
+before it is offered:
+
+| Result | When |
+|---|---|
+| `-- REALIGN not proposed: ... already received ordered rows` | A `GROUP BY`-only shape whose driving plan has no Sort on this table under the aggregate. The order already came from an index, so there is nothing to remove. |
+| `-- REALIGN not proposed: key (...) is ... the key of clustered index ...` | The realigned key is the clustered key or a leading prefix of it. A clustered scan already delivers that order; a nonclustered copy only narrows the scan. |
+| `-- REALIGN -- CREATE INDEX ... ; TRADE-OFF: range column(s) ...` | Offered, but a range (inequality) column moved to `INCLUDE`, so the realigned key gives up the seek `create_index_sql` has. Which wins depends on how many rows that range removes -- compare both in an actual plan. |
+
+Measured on `Sales.SalesOrderDetail` (`GROUP BY SalesOrderID`, `UnitPrice > 100`):
+the realigned `(SalesOrderID) INCLUDE (LineTotal, UnitPrice)` read 591 pages
+against `create_index_sql`'s 260 and removed nothing -- the clustered key already
+led with `SalesOrderID`. That proposal is now withheld with the first message.
+
 ### `recommended_compression` / `compression_reason` / `compression_sql`
 
 `recommended_compression` is `PAGE` or NULL -- **ROW is never recommended**, and
