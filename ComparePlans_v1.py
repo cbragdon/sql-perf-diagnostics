@@ -1841,7 +1841,7 @@ def _recreate_index_ddl(row, fillfactor=DEFAULT_FILLFACTOR):
             "index before running."]
 
 
-def _fpoc_realign_index(row, tbl_raw, fillfactor, ck_cols=()):
+def _fpoc_realign_index(row, tbl_raw, fillfactor, ck_cols=(), ck_name="", ck_display=""):
     """A REALIGN -- CREATE INDEX line that reorders a missing-index proposal's key
     -- equality/filter cols, then GROUP BY cols, then ORDER BY cols last (ASC/DESC)
     -- so the query's Sort / Hash Aggregate is eliminated. Range/inequality cols are
@@ -1850,8 +1850,15 @@ def _fpoc_realign_index(row, tbl_raw, fillfactor, ck_cols=()):
     added -- a nonclustered index already carries them as the row locator: they are
     dropped from INCLUDE always, and from the trailing key positions (the locator
     sits there implicitly, and the engine can scan it backwards for DESC).
-    Returns [line, caveat] or None when the realigned key would equal the DMV
-    proposal's own key + INCLUDE (nothing to realign).
+    Returns [line, caveat], a one-line "REALIGN not proposed -- <reason>" when the
+    realigned key cannot remove anything, or None when the realigned key would equal
+    the DMV proposal's own key + INCLUDE (nothing to realign).
+    Withheld (Curtis, 2026-10-25 -- the same three checks as usp_IndexAnalysis
+    Section 13b): (1) usp_IndexAnalysis already withheld it because the driving
+    plan's aggregate received ordered rows -- that verdict is read from the row's
+    realigned_create_index_sql, since this tool sees the proposal, not the driving
+    plan; (2) the key is all clustered key, which a clustered scan already orders.
+    (3) A demoted range column is still offered, with a TRADE-OFF note naming it.
     (v1 reads only top-level GROUP BY / result ORDER BY. It does not parse
     OVER (PARTITION BY ...) -- but a window function's PARTITION BY surfaces in the
     plan as a Segment <GroupBy>, so it arrives through the GROUP BY path; when
@@ -1875,6 +1882,13 @@ def _fpoc_realign_index(row, tbl_raw, fillfactor, ck_cols=()):
     inc = cols("include_columns_display")
     if not ordby and not grp:
         return None
+    # (1) usp_IndexAnalysis judged the driving plan and found nothing to remove. An older
+    # deployment of the proc never writes this line, so the checks below still run there.
+    proc_rl = _v(row, "realigned_create_index_sql") or ""
+    if proc_rl.startswith("-- REALIGN not proposed: the driving plan"):
+        reason = proc_rl[len("-- REALIGN not proposed: "):].replace(
+            "Use create_index_sql,", "Use the DMV index above,")     # the proc's column name means nothing here
+        return [f"        REALIGN not proposed -- {reason}"]
 
     ck = {_debracket(c) for c in ck_cols}                   # clustered-key columns (implicit locator)
     ck_list = [_debracket(c) for c in ck_cols]              # ...in order
@@ -1897,6 +1911,7 @@ def _fpoc_realign_index(row, tbl_raw, fillfactor, ck_cols=()):
     for cand in range(1, min(len(key), len(ck_list)) + 1):
         if [_bare(x) for x in key[-cand:]] == ck_list[:cand]:
             m = cand
+    trimmed = key[-m:] if m else []
     if m:
         del key[-m:]
     keyset = {_bare(k) for k in key}
@@ -1911,10 +1926,28 @@ def _fpoc_realign_index(row, tbl_raw, fillfactor, ck_cols=()):
             include.append(name)
 
     if not key:
-        return None                                         # all-CK key -- the clustered index serves it
+        # (2) all-CK key -- the clustered index already delivers this order. Said, not silent.
+        # Names as the catalog spells them: _debracket / _norm_cols lower-case (they are for matching).
+        _ck = ck_display or ", ".join(ck_cols)
+        _ckn = ck_name.strip()
+        if _ckn and not _ckn.startswith("["):
+            _ckn = f"[{_ckn}]"
+        return [f"        REALIGN not proposed -- key ({', '.join(trimmed)}) is "
+                + ("the key" if len(trimmed) == len(ck_list) else "a leading prefix of the key")
+                + f" of clustered index {(_ckn + ' ') if _ckn else ''}({_ck}), "
+                "which already delivers this order; a nonclustered copy would only narrow the scan. "
+                "Use the DMV index above, which seeks the filter."]
     dmv_key = [_debracket(x) for x in _norm_cols(_v(row, "key_columns_display"))]
     if [_bare(k) for k in key] == dmv_key:
         return None                                         # same order the DMV already gave
+    # (3) range columns moved to INCLUDE give up the seek the DMV index has
+    demoted = [n for n, _d in ineq if _debracket(n) not in keyset and _debracket(n) not in ck]
+    tradeoff = ""
+    if demoted:
+        tradeoff = (f" TRADE-OFF: range column(s) {', '.join(demoted)} moved to INCLUDE, so this key "
+                    "cannot seek them and reads every row in its leading-key range, where the DMV "
+                    "index above seeks them. Prefer this one only if the Sort / aggregate it removes "
+                    "costs more than the rows that range filters out -- compare both in an actual plan.")
 
     name = (_v(row, "index_name") or "IX_realigned").replace("<<missing #", "IX_realigned_").replace(">>", "")
     line = f"CREATE INDEX [{name}] ON {tbl_raw} ({', '.join(key)})"
@@ -1936,12 +1969,12 @@ def _fpoc_realign_index(row, tbl_raw, fillfactor, ck_cols=()):
                   f"plan's Segment) = {_p}; O (OVER ... ORDER BY) = {_o}"
                   + (f"; F (WHERE) leads on {', '.join(n for n, _ in eq)}." if wkind == "FPOC"
                      else " (no WHERE filter).")
-                  + ck_note)
+                  + ck_note + tradeoff)
     else:
         caveat = ("        --         key ordered equality/filter -> GROUP BY -> ORDER BY (last) so "
                   "the query's Sort / Hash Aggregate is removed, not just the lookup; range / "
                   "inequality cols stay in INCLUDE (can't share the key with ORDER BY without a "
-                  "Sort). If a range is highly selective, prefer the DMV index above." + ck_note)
+                  "Sort)." + ck_note + tradeoff)
     return [f"        REALIGN -- {line};", caveat]
 
 
@@ -1974,6 +2007,8 @@ def _format_index_analysis(raw, generated, fillfactor=DEFAULT_FILLFACTOR, show_m
     _clu = next((r for r in rows if "CLUSTERED" in _v(r, "type_desc").upper()
                  and "NONCLUSTERED" not in _v(r, "type_desc").upper()), None)
     ck_cols = _norm_cols(_v(_clu, "key_columns_display")) if _clu else []
+    ck_name = _v(_clu, "index_name") if _clu else ""
+    ck_display = _v(_clu, "key_columns_display") if _clu else ""
 
     def _impact(r):
         try:
@@ -2116,7 +2151,7 @@ def _format_index_analysis(raw, generated, fillfactor=DEFAULT_FILLFACTOR, show_m
                 ddl = re.sub(r"\s*--\s*impact\b.*$", "", ddl).rstrip()
                 out.append(f"        {ddl}")
             if realign:
-                rl = _fpoc_realign_index(winner, tbl_raw, fillfactor, ck_cols)
+                rl = _fpoc_realign_index(winner, tbl_raw, fillfactor, ck_cols, ck_name, ck_display)
                 if rl:
                     out.extend(rl)
 
@@ -2234,6 +2269,10 @@ def _colourise(text, on):
         if stripped.startswith("REALIGN -- "):
             _, _, rest = stripped.partition(" -- ")       # 'REALIGN' label, then the statement
             out.append(indent + c("REALIGN", "yellow") + " " + _hl_ddl("-- " + rest, c, "green"))
+            continue
+        if stripped.startswith("REALIGN not proposed -- "):
+            _, _, rest = stripped.partition(" -- ")       # label in yellow, the reason as plain text
+            out.append(indent + c("REALIGN not proposed", "yellow") + " -- " + rest)
             continue
         out.append(line)
     return "\n".join(out)
