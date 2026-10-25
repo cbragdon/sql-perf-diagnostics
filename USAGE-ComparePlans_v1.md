@@ -352,6 +352,16 @@ REALIGN caveat labels the key `FPOC` (a WHERE filter is present) or `POC` (none)
 an unfiltered window function produces no proposal, so `--single --analyze-indexes`
 emits a `WINDOW_FN_NO_INDEX` advisory instead.
 
+The REALIGN line is withheld, with the reason, when the reordered key could not
+remove anything -- the same checks `usp_IndexAnalysis` applies to its own
+`realigned_create_index_sql`:
+
+| Line | When |
+|---|---|
+| `REALIGN not proposed -- the driving plan's aggregate on ... already received ordered rows` | `usp_IndexAnalysis` found no Sort under the driving plan's aggregate (read from its `realigned_create_index_sql`; an older deployment of the procedure never writes this, and the clustered-key check below still runs) |
+| `REALIGN not proposed -- key (...) is ... the key of clustered index [...]` | Every reordered key column is the clustered key, which a clustered scan already orders |
+| `REALIGN -- CREATE INDEX ...` with `TRADE-OFF: range column(s) ... moved to INCLUDE` | Offered, but a range column gives up the seek the DMV index has -- compare both in an actual plan |
+
 ---
 
 ## Optional -- a written analysis from the plugin
