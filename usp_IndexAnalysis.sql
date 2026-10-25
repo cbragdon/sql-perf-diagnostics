@@ -3509,7 +3509,9 @@ WHERE  c.object_id IN (SELECT DISTINCT ia.object_id FROM #IndexAnalysis ia);';
             ia.analysis_id,
             (SELECT TOP (1) qb.match_method
              FROM #QsMissingBridge qb
-             WHERE qb.missing_index_id = TRY_CONVERT(INT, REPLACE(REPLACE(ia.index_name, N'<<missing #', N''), N'>>', N'')))
+             /* TRY_CAST, not TRY_CONVERT: TRY_CONVERT is not recognized below compat 110, so it failed
+                the install in a compat-100 host database (found by the 2026-10-25 compat matrix). */
+             WHERE qb.missing_index_id = TRY_CAST(REPLACE(REPLACE(ia.index_name, N'<<missing #', N''), N'>>', N'') AS INT))
         FROM #IndexAnalysis ia;
 
         INSERT #DropRiskResults
