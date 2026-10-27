@@ -378,6 +378,10 @@ nothing here should be read as their endorsement.**
   pattern. "FPOC" -- prepending the filter -- is this project's own extension and should not be
   attributed to him.
 
+## Security
+
+To report a security problem privately, see [SECURITY.md](SECURITY.md). Please don't open a public issue for it.
+
 ## Contributing
 
 Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for what to include in a report, the tests a change must pass, and the rules every change keeps.
