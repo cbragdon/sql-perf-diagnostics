@@ -5,7 +5,7 @@
 #
 #  Source : erikdarlingdata/claude-plugins
 #           plugins/sqlserver-query-plans/skills/query-plan-analysis/scripts/extract.py
-#  Commit : a306273  (2026-07-11)  -- plugin version 1.5.4
+#  Commit : c75c5d6  (2026-10-19)  -- plugin version 1.5.6
 #  Licence: MIT, Copyright (c) 2026 Erik Darling. Full text in
 #           LICENSE-plan_extract.txt beside this file (MIT requires the notice
 #           travel with the copy). The upstream file carries no per-file header.
@@ -20,6 +20,10 @@
 #  node_objects, parse_warnings, own_elapsed_ms, own_cpu_ms, detect_ce_guess,
 #  describe_statement, ...); main() stays guarded by __name__ == '__main__', so
 #  importing runs no CLI code.
+#
+#  Until 2026-10-26 this copy also carried two local functions, is_lazy_spool and
+#  is_lazy_spool_replay, while this header said it carried none. They now live in
+#  ComparePlans_v1.py; test_source_matches_mirror holds the body to upstream.
 #
 #  To refresh: re-copy from a newer upstream commit as a DELIBERATE step, re-run
 #  TestRunners/test_compareplans.py, and update the Commit line above.
@@ -123,6 +127,9 @@ class Node:
         self.actual_rows = 0.0
         self.actual_rows_read = 0.0
         self.actual_executions = 0.0
+        # Executions that read to the end of their input. Under a row goal, the
+        # rest were stopped early by the operator above. None if not recorded.
+        self.end_of_scans = None
         self.elapsed_ms = 0.0
         self.cpu_ms = 0.0
         self.logical_reads = 0.0
@@ -136,6 +143,7 @@ class Node:
                         "rows": num(t, "ActualRows"),
                         "rows_read": num(t, "ActualRowsRead"),
                         "executions": num(t, "ActualExecutions"),
+                        "end_of_scans": num(t, "ActualEndOfScans", None),
                         "elapsed": num(t, "ActualElapsedms"),
                         "cpu": num(t, "ActualCPUms"),
                         "reads": num(t, "ActualLogicalReads"),
@@ -154,6 +162,9 @@ class Node:
                 self.actual_rows = sum(t["rows"] for t in self.threads)
                 self.actual_rows_read = sum(t["rows_read"] for t in self.threads)
                 self.actual_executions = sum(t["executions"] for t in self.threads)
+                eos = [t["end_of_scans"] for t in self.threads if t["end_of_scans"] is not None]
+                if eos:
+                    self.end_of_scans = sum(eos)
                 self.cpu_ms = sum(t["cpu"] for t in self.threads)
                 self.logical_reads = sum(t["reads"] for t in self.threads)
                 self.elapsed_ms = max(t["elapsed"] for t in self.work_threads)
@@ -308,36 +319,6 @@ def is_eager_index_spool(node):
     return node.physical == "Index Spool" and "Eager" in node.logical
 
 
-def is_lazy_spool(node):
-    """
-    Table Spool or Index Spool whose LogicalOp is 'Lazy Spool' -- rows are pulled
-    and cached ON DEMAND as the parent asks for them, rather than the whole input
-    being consumed up front (that is an Eager Spool, handled separately above).
-    Confirmed against a real captured plan, not assumed: a recursive CTE over
-    Production.BillOfMaterials compiled to an Index Spool (Lazy Spool) holding the
-    working table, with the recursive member's own reference to it showing up as a
-    SEPARATE RelOp, a Table Spool also logged 'Lazy Spool' -- see is_lazy_spool_replay
-    below for why that second one is not a second physical cache. Not an
-    index-missing signal the way an eager INDEX spool is; a recursive CTE's spool is
-    not something an index removes.
-    """
-    return node.physical in ("Table Spool", "Index Spool") and node.logical == "Lazy Spool"
-
-
-def is_lazy_spool_replay(node):
-    """
-    True when this spool's own <Spool> element carries PrimaryNodeId -- it is a
-    stack replay of an earlier spool in the same recursive CTE (SQL Server's
-    Concatenation + Spool + Stack machinery), not a second physical cache. Confirmed
-    against a real plan: the anchor's Index Spool is NodeId 0 with no PrimaryNodeId;
-    the recursive member's own Table Spool carries
-    <Spool PrimaryNodeId="0" Stack="1">. Counting both as separate detections would
-    double-report the same working table.
-    """
-    sp = node.el.find(NS + "Spool")
-    return sp is not None and sp.get("PrimaryNodeId") is not None
-
-
 def own_cost(node):
     """
     Estimated cost attributable to this operator alone. Subtree cost is cumulative,
@@ -368,16 +349,18 @@ def fmt_duration(ms):
 # ---------------------------------------------------------------------------
 
 
-def sum_batch_subtree(node):
-    """Batch operators pipeline, so their elapsed times add rather than nest."""
-    total = node.elapsed_ms
+def sum_batch_subtree(node, key="elapsed"):
+    """Batch operators pipeline, so their times add rather than nest. CPU too."""
+    total = node.elapsed_ms if key == "elapsed" else node.cpu_ms
     for c in node.children:
         if c.physical == "Parallelism":
             continue  # zone boundary
         if c.mode == "Batch" and c.has_actual:
-            total += sum_batch_subtree(c)
-        else:
+            total += sum_batch_subtree(c, key)
+        elif key == "elapsed":
             total += effective_child_elapsed(c)
+        else:
+            total += effective_child_cpu(c)
     return total
 
 
@@ -449,8 +432,8 @@ def _child_by_thread(child, key):
 
 def per_thread_self(node, key):
     """
-    Parallel: subtract within a thread, never across threads, then take the
-    slowest thread. Cross-thread subtraction produces nonsense.
+    Parallel: subtract within a thread, never across threads. Cross-thread
+    subtraction produces nonsense. Returns {thread: self time}.
 
     The coordinator (thread 0) is excluded: it does no row work, and its elapsed
     is the parallel branch's wall clock, so including it hands every operator in
@@ -460,14 +443,12 @@ def per_thread_self(node, key):
     child_by_thread = {}
     for child in node.children:
         _merge(child_by_thread, _child_by_thread(child, key))
-    return max(
-        (max(0.0, p - child_by_thread.get(t, 0.0)) for t, p in parent_by_thread.items()),
-        default=0.0,
-    )
+    return {t: max(0.0, p - child_by_thread.get(t, 0.0)) for t, p in parent_by_thread.items()}
 
 
 def per_thread_self_elapsed(node):
-    return per_thread_self(node, "elapsed")
+    # Elapsed is wall clock: the operator finished when its slowest thread did.
+    return max(per_thread_self(node, "elapsed").values(), default=0.0)
 
 
 def own_elapsed_ms(node):
@@ -490,6 +471,12 @@ def own_elapsed_ms(node):
 def effective_child_cpu(child):
     if child.physical == "Parallelism" and child.children:
         return max(effective_child_cpu(gc) for gc in child.children)
+    # A batch child's CPU is standalone, exactly like its elapsed. Taking only
+    # its own value leaves the rest of the zone's CPU in the row-mode parent: a
+    # serial Stream Aggregate over a batch Sort reported 14,771 ms of self CPU
+    # against 3,059 ms of self elapsed. The zone sum gives 3,112.
+    if child.mode == "Batch" and child.has_actual:
+        return sum_batch_subtree(child, "cpu")
     if child.cpu_ms > 0:
         return child.cpu_ms
     if not child.children:
@@ -508,9 +495,12 @@ def own_cpu_ms(node):
     if node.mode == "Batch":
         return node.cpu_ms  # standalone, exactly like batch-mode elapsed
     if len(node.threads) > 1:
-        # Coordinator excluded, same as elapsed: it burns no CPU, so leaving it in
-        # only contributes a zero to the max and hides the workers' real self CPU.
-        return per_thread_self(node, "cpu")
+        # CPU SUMS across threads; it does not take the slowest one. Every thread
+        # burned its own, which is why CPU above elapsed means parallelism. Taking
+        # the max reported one thread's share: a DOP 8 scan that burned 624 ms
+        # showed 79. Coordinator excluded, same as elapsed: it burns no CPU, so
+        # leaving it in only contributes a zero.
+        return sum(per_thread_self(node, "cpu").values())
     return max(0.0, node.cpu_ms - sum(effective_child_cpu(c) for c in node.children))
 
 
@@ -637,6 +627,25 @@ def flatten(node, acc=None):
 
 def fmt_rows(n):
     return f"{n:,.0f}" if n >= 1 else f"{n:.4g}"
+
+
+def row_goal_runtime(n):
+    """
+    What a row goal did at runtime. EstimateRowsWithoutRowGoal only says the
+    optimizer PLANNED to stop early. ActualEndOfScans counts the executions that
+    read to the end of their input anyway, so the rest are the ones that stopped.
+    """
+    if n.end_of_scans is None or n.actual_executions <= 0:
+        return "may have stopped early"
+    if n.end_of_scans >= n.actual_executions:
+        return "did not stop it, every execution read to the end"
+    stopped = n.actual_executions - n.end_of_scans
+    if n.actual_executions == 1:
+        return "stopped early"
+    return (
+        f"{fmt_rows(stopped)} of {fmt_rows(n.actual_executions)} "
+        f"executions stopped early"
+    )
 
 
 def render_tree(node, out, has_actual, depth=0, budget=None):
@@ -846,12 +855,14 @@ def describe_statement(stmt_el, out, top_n, full_sql=False):
             if n.actual_rows_read > 0:
                 ratio = n.actual_rows_read / max(n.actual_rows, 1)
                 if ratio >= 2:
+                    # A row goal does not excuse the reads: an execution can stop
+                    # early and still read millions of rows first, or never stop.
+                    notes = []
+                    if ratio >= 100:
+                        notes.append("<-- reads far more than it returns")
                     if n.row_goal:
-                        flag = "   [row goal: stopped early, did not read the table]"
-                    elif ratio >= 100:
-                        flag = "   <-- reads far more than it returns"
-                    else:
-                        flag = ""
+                        notes.append(f"[row goal: {row_goal_runtime(n)}]")
+                    flag = "   " + "  ".join(notes) if notes else ""
                     out.append(
                         f"  {'':>14}  {'':>12}  read {fmt_rows(n.actual_rows_read)} rows "
                         f"to emit {fmt_rows(n.actual_rows)} ({ratio:,.0f}x){flag}"
@@ -1039,10 +1050,15 @@ def describe_statement(stmt_el, out, top_n, full_sql=False):
                 f"(correlated - a join here needs no predicate)"
             )
         if n.row_goal:
-            bits.append(
-                "    row goal  : active (TOP/FAST/EXISTS) - a scan may stop early, so a "
-                "large rows-read count does not mean it read the whole table"
-            )
+            if n.has_actual and n.end_of_scans is not None:
+                bits.append(
+                    f"    row goal  : active (TOP/FAST/EXISTS) - {row_goal_runtime(n)}"
+                )
+            else:
+                bits.append(
+                    "    row goal  : active (TOP/FAST/EXISTS) - a scan may stop early, so a "
+                    "large rows-read count does not mean it read the whole table"
+                )
         # For a no-join-predicate warning: did the output actually multiply?
         if any("No join predicate" in w for w in n.warnings) and n.has_actual:
             inputs = [c.actual_rows for c in n.children if c.has_actual]

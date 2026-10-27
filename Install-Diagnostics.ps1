@@ -10,10 +10,11 @@
 
     WHAT IT DOES, in order:
       1. Confirms sqlcmd is on PATH.
-      2. Connects and reports the engine version and edition.
-      3. Confirms the utility database exists (it will NOT create one -- see below).
-      4. Runs each of the four procedure files against that database.
-      5. Re-reads sys.procedures and confirms all four now exist.
+      2. Confirms all four procedure files are present, before anything is deployed.
+      3. Connects and reports the engine version and edition.
+      4. Confirms the utility database exists (it will NOT create one -- see below).
+      5. Runs each of the four procedure files against that database.
+      6. Re-reads sys.procedures and confirms all four now exist.
 
     WHAT IT DELIBERATELY DOES NOT DO:
       - It never creates a database. If the utility database is missing the script stops and prints
