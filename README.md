@@ -364,8 +364,8 @@ are this project's own. **None of them is affiliated with this project, none has
 nothing here should be read as their endorsement.**
 
 - **`plan_extract.py` is Erik Darling's `extract.py`**, vendored verbatim under the MIT License from
-  [erikdarlingdata/claude-plugins](https://github.com/erikdarlingdata/claude-plugins) at mirror
-  commit `a306273`. Its licence is `LICENSE-plan_extract.txt` and must travel with it.
+  [erikdarlingdata/claude-plugins](https://github.com/erikdarlingdata/claude-plugins) at upstream
+  commit `c75c5d6` (plugin 1.5.6). Its licence is `LICENSE-plan_extract.txt` and must travel with it.
   ComparePlans' own comparison logic is first-party; the parser is his.
 - **The index analysis is a clean-room reimplementation** of the *design ideas* behind Jason
   Strate's `sp_IndexAnalysis`. His licence is internal-use-only and prohibits redistribution, so

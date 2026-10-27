@@ -97,6 +97,38 @@ import plan_extract as px
 
 NS = px.NS
 
+
+# Lazy-spool classification. Kept here rather than in plan_extract.py so that file stays
+# upstream's extract.py byte for byte (moved 2026-10-26).
+def is_lazy_spool(node):
+    """
+    Table Spool or Index Spool whose LogicalOp is 'Lazy Spool' -- rows are pulled
+    and cached ON DEMAND as the parent asks for them, rather than the whole input
+    being consumed up front (that is an Eager Spool, handled separately above).
+    Confirmed against a real captured plan, not assumed: a recursive CTE over
+    Production.BillOfMaterials compiled to an Index Spool (Lazy Spool) holding the
+    working table, with the recursive member's own reference to it showing up as a
+    SEPARATE RelOp, a Table Spool also logged 'Lazy Spool' -- see is_lazy_spool_replay
+    below for why that second one is not a second physical cache. Not an
+    index-missing signal the way an eager INDEX spool is; a recursive CTE's spool is
+    not something an index removes.
+    """
+    return node.physical in ("Table Spool", "Index Spool") and node.logical == "Lazy Spool"
+
+
+def is_lazy_spool_replay(node):
+    """
+    True when this spool's own <Spool> element carries PrimaryNodeId -- it is a
+    stack replay of an earlier spool in the same recursive CTE (SQL Server's
+    Concatenation + Spool + Stack machinery), not a second physical cache. Confirmed
+    against a real plan: the anchor's Index Spool is NodeId 0 with no PrimaryNodeId;
+    the recursive member's own Table Spool carries
+    <Spool PrimaryNodeId="0" Stack="1">. Counting both as separate detections would
+    double-report the same working table.
+    """
+    sp = node.el.find(NS + "Spool")
+    return sp is not None and sp.get("PrimaryNodeId") is not None
+
 # --- optional ANSI colour for --format text (never for md / json / --emit-prompt) ---
 _ANSI = {
     "reset": "\033[0m", "bold": "\033[1m", "dim": "\033[2m",
@@ -533,7 +565,7 @@ class LoadedPlan:
 
         # lazy spool (Table Spool or Index Spool, LogicalOp="Lazy Spool") -- rows
         # cached on demand rather than the whole input consumed up front. Skip a
-        # stack replay of an earlier spool (px.is_lazy_spool_replay): a recursive
+        # stack replay of an earlier spool (is_lazy_spool_replay): a recursive
         # CTE's own reference to its accumulated working table is NOT a second
         # physical cache, and counting it as one would double-report.
         #
@@ -555,13 +587,13 @@ class LoadedPlan:
         # PrimaryNodeId -> the largest rebind count among its replays first.
         replay_rebinds = {}
         for n in self.nodes:
-            if px.is_lazy_spool(n) and px.is_lazy_spool_replay(n):
+            if is_lazy_spool(n) and is_lazy_spool_replay(n):
                 pid = n.el.find(NS + "Spool").get("PrimaryNodeId")
                 replay_rebinds[pid] = max(replay_rebinds.get(pid, 0.0), n.est_rebinds)
 
         self.lazy_spools = []
         for n in self.nodes:
-            if not px.is_lazy_spool(n) or px.is_lazy_spool_replay(n):
+            if not is_lazy_spool(n) or is_lazy_spool_replay(n):
                 continue
             is_recursive = any(c.physical == "Concatenation" for c in px.flatten(n))
             rebinds = replay_rebinds.get(n.node_id, n.est_rebinds)
