@@ -378,6 +378,10 @@ nothing here should be read as their endorsement.**
   pattern. "FPOC" -- prepending the filter -- is this project's own extension and should not be
   attributed to him.
 
+## Contributing
+
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for what to include in a report, the tests a change must pass, and the rules every change keeps.
+
 ## License
 
 MIT. See `LICENSE`. `plan_extract.py` is vendored and separately covered by `LICENSE-plan_extract.txt`, which must travel with it; `NOTICE` records that.
