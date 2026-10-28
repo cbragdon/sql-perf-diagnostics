@@ -59,13 +59,13 @@ CREATE OR ALTER PROCEDURE dbo.usp_IndexAnalysis
     /*  Cross-database scope -------------------------------------------------------------------- */
     @DatabaseName                 sysname       = NULL,   -- NULL = current database
     @AllDatabases                 BIT           = 0,      -- every online, writable, non-system database
-    @IncludeDatabases             NVARCHAR(MAX) = NULL,   -- comma-separated; only with @AllDatabases = 1
-    @ExcludeDatabases             NVARCHAR(MAX) = NULL,   -- comma-separated; only with @AllDatabases = 1
+    @IncludeDatabases             NVARCHAR(MAX) = NULL,   -- comma-separated, [bracket] a name with a comma; only with @AllDatabases = 1
+    @ExcludeDatabases             NVARCHAR(MAX) = NULL,   -- comma-separated, [bracket] a name with a comma; only with @AllDatabases = 1
     @ExcludeHostingDatabase       BIT           = 1,      -- @AllDatabases = 1 skips DB_NAME() (this proc's own DB) by default
 
     /*  Table scope (same as the script) ------------------------------------------------------- */
     @TableName                    NVARCHAR(776) = NULL,   -- one table; bare or schema-qualified
-    @TableList                    NVARCHAR(MAX) = NULL,   -- comma-separated list; unions with @TableName
+    @TableList                    NVARCHAR(MAX) = NULL,   -- comma-separated, [schema].[table] for a name with a comma; unions with @TableName
     @StatementPlanXml             NVARCHAR(MAX) = NULL,   -- Piece 1: a SHOWPLAN_XML document for ONE statement. The tables it touches BECOME
                                                           -- the scope (so it cannot be combined with @TableName / @TableList or @AllDatabases),
                                                           -- its <MissingIndexes> hints become proposals (proposal_source = 'STATEMENT') and its
@@ -295,27 +295,50 @@ BEGIN
     CREATE TABLE #SkippedDatabases (DatabaseName sysname NOT NULL, Reason NVARCHAR(600) NOT NULL);
     CREATE TABLE #NameList         (Which CHAR(3) NOT NULL, DatabaseName sysname NOT NULL);
 
-    /*  spt_values tally split -- no STRING_SPLIT (needs compat 130+ in THIS database). */
-    IF @IncludeDatabases IS NOT NULL
-        INSERT #NameList (Which, DatabaseName)
-        SELECT 'inc', LTRIM(RTRIM(SUBSTRING(N',' + @IncludeDatabases + N',', t.n + 1,
-                    CHARINDEX(N',', N',' + @IncludeDatabases + N',', t.n + 1) - t.n - 1)))
-        FROM (SELECT TOP (LEN(@IncludeDatabases)) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n
-              FROM master..spt_values) AS t
-        WHERE SUBSTRING(N',' + @IncludeDatabases + N',', t.n, 1) = N','
-          AND CHARINDEX(N',', N',' + @IncludeDatabases + N',', t.n + 1) > t.n
-          AND LTRIM(RTRIM(SUBSTRING(N',' + @IncludeDatabases + N',', t.n + 1,
-                    CHARINDEX(N',', N',' + @IncludeDatabases + N',', t.n + 1) - t.n - 1))) <> N'';
-    IF @ExcludeDatabases IS NOT NULL
-        INSERT #NameList (Which, DatabaseName)
-        SELECT 'exc', LTRIM(RTRIM(SUBSTRING(N',' + @ExcludeDatabases + N',', t.n + 1,
-                    CHARINDEX(N',', N',' + @ExcludeDatabases + N',', t.n + 1) - t.n - 1)))
-        FROM (SELECT TOP (LEN(@ExcludeDatabases)) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n
-              FROM master..spt_values) AS t
-        WHERE SUBSTRING(N',' + @ExcludeDatabases + N',', t.n, 1) = N','
-          AND CHARINDEX(N',', N',' + @ExcludeDatabases + N',', t.n + 1) > t.n
-          AND LTRIM(RTRIM(SUBSTRING(N',' + @ExcludeDatabases + N',', t.n + 1,
-                    CHARINDEX(N',', N',' + @ExcludeDatabases + N',', t.n + 1) - t.n - 1))) <> N'';
+    /*  Name lists. Items are comma-separated, and an item may be bracket-quoted ([name], with ]] for a ]
+        inside it) so a database whose name contains a comma can be named; QUOTENAME output is valid
+        input, and plain lists work as before. A character loop, not STRING_SPLIT, which needs compat
+        130+ in the database this batch compiles in -- DBAdmin, not the target. A malformed bracketed
+        item aborts rather than silently matching nothing.                                         */
+    DECLARE @NlPass INT = 1, @NlWhich CHAR(3), @NlList NVARCHAR(MAX), @NlPos INT, @NlStart INT, @NlLen INT,
+            @NlInBracket BIT, @NlCh NCHAR(1), @NlItem NVARCHAR(MAX), @NlShown NVARCHAR(300);
+    WHILE @NlPass <= 2
+    BEGIN
+        SELECT @NlWhich = CASE @NlPass WHEN 1 THEN 'inc' ELSE 'exc' END,
+               @NlList  = CASE @NlPass WHEN 1 THEN @IncludeDatabases ELSE @ExcludeDatabases END,
+               @NlPos = 1, @NlStart = 1, @NlInBracket = 0;
+        SET @NlLen = LEN(@NlList + N'x') - 1;      /* NULL list -> NULL length -> no iterations */
+        WHILE @NlPos <= @NlLen + 1
+        BEGIN
+            SET @NlCh = SUBSTRING(@NlList, @NlPos, 1);
+            IF @NlPos > @NlLen OR (@NlInBracket = 0 AND @NlCh = N',')
+            BEGIN
+                SET @NlItem = LTRIM(RTRIM(SUBSTRING(@NlList, @NlStart, @NlPos - @NlStart)));
+                IF LEFT(@NlItem, 1) = N'['
+                BEGIN
+                    IF PARSENAME(@NlItem, 1) IS NULL OR PARSENAME(@NlItem, 2) IS NOT NULL
+                       OR QUOTENAME(PARSENAME(@NlItem, 1)) <> @NlItem
+                    BEGIN
+                        SET @NlShown = LEFT(@NlItem, 300);
+                        RAISERROR('@IncludeDatabases / @ExcludeDatabases item %s is a malformed bracketed name. Write it as [name], doubling any ] inside it.', 16, 1, @NlShown);
+                        RETURN;
+                    END;
+                    SET @NlItem = PARSENAME(@NlItem, 1);
+                END;
+                IF @NlItem <> N''
+                    INSERT #NameList (Which, DatabaseName) VALUES (@NlWhich, @NlItem);
+                SET @NlStart = @NlPos + 1;
+            END
+            ELSE IF @NlInBracket = 1 AND @NlCh = N']'
+            BEGIN
+                IF SUBSTRING(@NlList, @NlPos + 1, 1) = N']' SET @NlPos += 1; ELSE SET @NlInBracket = 0;
+            END
+            ELSE IF @NlInBracket = 0 AND @NlCh = N'['
+                SET @NlInBracket = 1;
+            SET @NlPos += 1;
+        END;
+        SET @NlPass += 1;
+    END;
 
     IF @AllDatabases = 1
     BEGIN
@@ -478,15 +501,30 @@ BEGIN
         INSERT #RequestedNames (nm) VALUES (LTRIM(RTRIM(@TableName)));
 
     IF NULLIF(LTRIM(RTRIM(@TableList)), N'') IS NOT NULL
-        INSERT #RequestedNames (nm)
-        SELECT LTRIM(RTRIM(SUBSTRING(N',' + @TableList + N',', t.n + 1,
-                    CHARINDEX(N',', N',' + @TableList + N',', t.n + 1) - t.n - 1)))
-        FROM (SELECT TOP (LEN(@TableList)) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n
-              FROM master..spt_values) AS t
-        WHERE SUBSTRING(N',' + @TableList + N',', t.n, 1) = N','
-          AND CHARINDEX(N',', N',' + @TableList + N',', t.n + 1) > t.n
-          AND LTRIM(RTRIM(SUBSTRING(N',' + @TableList + N',', t.n + 1,
-                    CHARINDEX(N',', N',' + @TableList + N',', t.n + 1) - t.n - 1))) <> N'';
+    BEGIN
+        /*  Split on commas OUTSIDE square brackets, so a bracket-quoted part may hold a comma:
+            [Sales].[Q1, Q2]. Items stay as written -- OBJECT_ID() resolves them, brackets and all. */
+        DECLARE @TlPos INT = 1, @TlStart INT = 1, @TlLen INT = LEN(@TableList + N'x') - 1, @TlInBracket BIT = 0,
+                @TlCh NCHAR(1), @TlItem NVARCHAR(MAX);
+        WHILE @TlPos <= @TlLen + 1
+        BEGIN
+            SET @TlCh = SUBSTRING(@TableList, @TlPos, 1);
+            IF @TlPos > @TlLen OR (@TlInBracket = 0 AND @TlCh = N',')
+            BEGIN
+                SET @TlItem = LTRIM(RTRIM(SUBSTRING(@TableList, @TlStart, @TlPos - @TlStart)));
+                IF @TlItem <> N''
+                    INSERT #RequestedNames (nm) VALUES (@TlItem);
+                SET @TlStart = @TlPos + 1;
+            END
+            ELSE IF @TlInBracket = 1 AND @TlCh = N']'
+            BEGIN
+                IF SUBSTRING(@TableList, @TlPos + 1, 1) = N']' SET @TlPos += 1; ELSE SET @TlInBracket = 0;
+            END
+            ELSE IF @TlInBracket = 0 AND @TlCh = N'['
+                SET @TlInBracket = 1;
+            SET @TlPos += 1;
+        END;
+    END;
 
     SET @ScopeToTables = CASE WHEN EXISTS (SELECT 1 FROM #RequestedNames) THEN 1 ELSE 0 END;
 

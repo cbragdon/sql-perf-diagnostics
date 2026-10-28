@@ -44,7 +44,8 @@ EXEC DBAdmin.dbo.usp_FindTimeoutStatementsNQueryStore
 Every result set gains a leading `DatabaseName` column. The warnings the script
 `PRINT`s become a `#PreflightNotes` result set instead (a `PRINT` does not
 reliably reach a caller sweeping many databases). Fleet use: `@AllDatabases = 1`
-with `@IncludeDatabases` / `@ExcludeDatabases` / `@ExcludeHostingDatabase`;
+with `@IncludeDatabases` / `@ExcludeDatabases` / `@ExcludeHostingDatabase` (comma-separated;
+bracket a name that contains a comma, `]]` for a `]`: `N'Sales, [Finance, EU]'`);
 databases asked for and not analysed appear in `#SkippedDatabases`, whose reason
 names every cause that applies, separated by `; ` -- a system database, not
 ONLINE, in STANDBY, READ_ONLY, a database snapshot, Query Store not enabled, also
