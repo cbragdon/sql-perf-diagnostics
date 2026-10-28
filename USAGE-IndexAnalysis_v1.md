@@ -37,7 +37,9 @@ commented-out line for you to review and run yourself.
 | One table | `@TableName = 'Sales.SalesOrderDetail'` (bare or schema-qualified, brackets optional) | Checking the tables a feature touches. A typo **aborts** with a message -- it never silently returns nothing. |
 | Several named tables | `@TableList = 'Sales.SalesOrderDetail, Person.Address, dbo.Widget'` | A change set spanning a few tables. Every unresolved name aborts the run. |
 
-`@TableName` and `@TableList` union -- set either, both, or neither.
+`@TableName` and `@TableList` union -- set either, both, or neither. A name that contains a
+comma goes in square brackets, `]]` for a `]` inside it: `@TableList = 'dbo.Orders, [dbo].[Q1, Q2]'`.
+The list splits only on commas outside brackets.
 
 ---
 

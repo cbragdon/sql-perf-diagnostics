@@ -43,8 +43,8 @@ GO
 CREATE OR ALTER PROCEDURE dbo.usp_ParameterSniffingDiagnostic
     @DatabaseName                  sysname       = NULL,   -- NULL = current database
     @AllDatabases                  BIT           = 0,      -- every online database with Query Store running
-    @IncludeDatabases              NVARCHAR(MAX) = NULL,   -- comma-separated; only with @AllDatabases = 1
-    @ExcludeDatabases              NVARCHAR(MAX) = NULL,   -- comma-separated; only with @AllDatabases = 1
+    @IncludeDatabases              NVARCHAR(MAX) = NULL,   -- comma-separated, [bracket] a name with a comma; only with @AllDatabases = 1
+    @ExcludeDatabases              NVARCHAR(MAX) = NULL,   -- comma-separated, [bracket] a name with a comma; only with @AllDatabases = 1
     @ExcludeHostingDatabase        BIT           = 1,      -- @AllDatabases = 1 skips DB_NAME() by default:
                                                              -- the database this proc lives in accumulates
                                                              -- the proc's OWN analytical query volume in its
@@ -167,29 +167,50 @@ BEGIN
     CREATE TABLE #SkippedDatabases (DatabaseName sysname NOT NULL, Reason NVARCHAR(400) NOT NULL);
     CREATE TABLE #NameList (Which CHAR(3) NOT NULL, DatabaseName sysname NOT NULL);
 
-    /*  STRING_SPLIT needs compat 130+ in the database this batch compiles in -- DBAdmin, not the
-        target, since this runs before any target is even chosen. DBAdmin is 150 today, but that
-        is a setting nobody here is watching, not a guarantee; a tally split has no such floor.  */
-    IF @IncludeDatabases IS NOT NULL
-        INSERT #NameList (Which, DatabaseName)
-        SELECT 'inc', LTRIM(RTRIM(SUBSTRING(N',' + @IncludeDatabases + N',', t.n + 1,
-                    CHARINDEX(N',', N',' + @IncludeDatabases + N',', t.n + 1) - t.n - 1)))
-        FROM (SELECT TOP (LEN(@IncludeDatabases)) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n
-              FROM master..spt_values) AS t
-        WHERE SUBSTRING(N',' + @IncludeDatabases + N',', t.n, 1) = N','
-          AND CHARINDEX(N',', N',' + @IncludeDatabases + N',', t.n + 1) > t.n
-          AND LTRIM(RTRIM(SUBSTRING(N',' + @IncludeDatabases + N',', t.n + 1,
-                    CHARINDEX(N',', N',' + @IncludeDatabases + N',', t.n + 1) - t.n - 1))) <> N'';
-    IF @ExcludeDatabases IS NOT NULL
-        INSERT #NameList (Which, DatabaseName)
-        SELECT 'exc', LTRIM(RTRIM(SUBSTRING(N',' + @ExcludeDatabases + N',', t.n + 1,
-                    CHARINDEX(N',', N',' + @ExcludeDatabases + N',', t.n + 1) - t.n - 1)))
-        FROM (SELECT TOP (LEN(@ExcludeDatabases)) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n
-              FROM master..spt_values) AS t
-        WHERE SUBSTRING(N',' + @ExcludeDatabases + N',', t.n, 1) = N','
-          AND CHARINDEX(N',', N',' + @ExcludeDatabases + N',', t.n + 1) > t.n
-          AND LTRIM(RTRIM(SUBSTRING(N',' + @ExcludeDatabases + N',', t.n + 1,
-                    CHARINDEX(N',', N',' + @ExcludeDatabases + N',', t.n + 1) - t.n - 1))) <> N'';
+    /*  Name lists. Items are comma-separated, and an item may be bracket-quoted ([name], with ]] for a ]
+        inside it) so a database whose name contains a comma can be named; QUOTENAME output is valid
+        input, and plain lists work as before. A character loop, not STRING_SPLIT, which needs compat
+        130+ in the database this batch compiles in -- DBAdmin, not the target. A malformed bracketed
+        item aborts rather than silently matching nothing.                                         */
+    DECLARE @NlPass INT = 1, @NlWhich CHAR(3), @NlList NVARCHAR(MAX), @NlPos INT, @NlStart INT, @NlLen INT,
+            @NlInBracket BIT, @NlCh NCHAR(1), @NlItem NVARCHAR(MAX), @NlShown NVARCHAR(300);
+    WHILE @NlPass <= 2
+    BEGIN
+        SELECT @NlWhich = CASE @NlPass WHEN 1 THEN 'inc' ELSE 'exc' END,
+               @NlList  = CASE @NlPass WHEN 1 THEN @IncludeDatabases ELSE @ExcludeDatabases END,
+               @NlPos = 1, @NlStart = 1, @NlInBracket = 0;
+        SET @NlLen = LEN(@NlList + N'x') - 1;      /* NULL list -> NULL length -> no iterations */
+        WHILE @NlPos <= @NlLen + 1
+        BEGIN
+            SET @NlCh = SUBSTRING(@NlList, @NlPos, 1);
+            IF @NlPos > @NlLen OR (@NlInBracket = 0 AND @NlCh = N',')
+            BEGIN
+                SET @NlItem = LTRIM(RTRIM(SUBSTRING(@NlList, @NlStart, @NlPos - @NlStart)));
+                IF LEFT(@NlItem, 1) = N'['
+                BEGIN
+                    IF PARSENAME(@NlItem, 1) IS NULL OR PARSENAME(@NlItem, 2) IS NOT NULL
+                       OR QUOTENAME(PARSENAME(@NlItem, 1)) <> @NlItem
+                    BEGIN
+                        SET @NlShown = LEFT(@NlItem, 300);
+                        RAISERROR('@IncludeDatabases / @ExcludeDatabases item %s is a malformed bracketed name. Write it as [name], doubling any ] inside it.', 16, 1, @NlShown);
+                        RETURN;
+                    END;
+                    SET @NlItem = PARSENAME(@NlItem, 1);
+                END;
+                IF @NlItem <> N''
+                    INSERT #NameList (Which, DatabaseName) VALUES (@NlWhich, @NlItem);
+                SET @NlStart = @NlPos + 1;
+            END
+            ELSE IF @NlInBracket = 1 AND @NlCh = N']'
+            BEGIN
+                IF SUBSTRING(@NlList, @NlPos + 1, 1) = N']' SET @NlPos += 1; ELSE SET @NlInBracket = 0;
+            END
+            ELSE IF @NlInBracket = 0 AND @NlCh = N'['
+                SET @NlInBracket = 1;
+            SET @NlPos += 1;
+        END;
+        SET @NlPass += 1;
+    END;
 
     IF @AllDatabases = 1
     BEGIN

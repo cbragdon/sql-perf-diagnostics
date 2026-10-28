@@ -75,7 +75,8 @@ EXEC DBAdmin.dbo.usp_ParameterSniffingDiagnostic
 
 Every result set gains a leading `DatabaseName` column; nothing else differs.
 Fleet use: `@AllDatabases = 1` with `@IncludeDatabases` / `@ExcludeDatabases` /
-`@ExcludeHostingDatabase`.
+`@ExcludeHostingDatabase`. The lists are comma-separated; a database whose name contains a comma
+goes in square brackets, `]]` for a `]` inside it: `@IncludeDatabases = N'Sales, [Finance, EU]'`.
 
 ### The parameters that matter
 
