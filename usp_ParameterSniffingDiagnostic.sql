@@ -197,9 +197,10 @@ BEGIN
                     END;
                     SET @NlItem = PARSENAME(@NlItem, 1);
                 END;
-                /*  #NameList holds sysname. With ANSI_WARNINGS OFF a longer item would be cut to 128
-                    characters without an error -- and could then name a different database. */
-                IF LEN(@NlItem) > 128
+                /*  #NameList holds sysname: 128 UTF-16 code units. With ANSI_WARNINGS OFF a longer item
+                    would be cut without an error -- and could then name a different database. DATALENGTH,
+                    not LEN: under an _SC collation LEN counts a surrogate pair as one character. */
+                IF DATALENGTH(@NlItem) > 256
                 BEGIN
                     SET @NlShown = LEFT(@NlItem, 300);
                     RAISERROR('@IncludeDatabases / @ExcludeDatabases item %s is longer than 128 characters, the longest a database name can be.', 16, 1, @NlShown);
@@ -1796,8 +1797,8 @@ BEGIN
         JOIN sys.schemas  s ON s.schema_id    = o.schema_id
         WHERE o.type IN (''U'', ''V'')
           AND EXISTS (SELECT 1 FROM #EligibilityTables et
-                      WHERE et.TableSchemaRaw = QUOTENAME(s.name)
-                        AND et.TableNameRaw   = QUOTENAME(o.name));'
+                      WHERE et.TableSchemaRaw COLLATE DATABASE_DEFAULT = QUOTENAME(s.name) COLLATE DATABASE_DEFAULT
+                        AND et.TableNameRaw   COLLATE DATABASE_DEFAULT = QUOTENAME(o.name) COLLATE DATABASE_DEFAULT);'
 
         EXEC sys.sp_executesql @Sql;
 
@@ -1847,10 +1848,12 @@ BEGIN
                  ELSE ''computed, not indexable (engine declined; no more specific reason resolved)''
             END
         FROM (SELECT DISTINCT TableSchemaRaw, TableNameRaw, ComputedColumnName FROM #ComputedColumnSources) cc
-        JOIN sys.schemas s   ON QUOTENAME(s.name) = cc.TableSchemaRaw
-        JOIN sys.objects o   ON o.schema_id = s.schema_id AND QUOTENAME(o.name) = cc.TableNameRaw
+        JOIN sys.schemas s   ON QUOTENAME(s.name) COLLATE DATABASE_DEFAULT = cc.TableSchemaRaw COLLATE DATABASE_DEFAULT
+        JOIN sys.objects o   ON o.schema_id = s.schema_id
+                            AND QUOTENAME(o.name) COLLATE DATABASE_DEFAULT = cc.TableNameRaw COLLATE DATABASE_DEFAULT
         JOIN sys.tables  tbl ON tbl.object_id = o.object_id
-        JOIN sys.columns c   ON c.object_id = o.object_id AND c.name = cc.ComputedColumnName
+        JOIN sys.columns c   ON c.object_id = o.object_id
+                            AND c.name COLLATE DATABASE_DEFAULT = cc.ComputedColumnName COLLATE DATABASE_DEFAULT
         JOIN sys.types   t   ON t.user_type_id = c.user_type_id;'
 
         EXEC sys.sp_executesql @Sql, N'@AllowLobIn BIT', @AllowLobIn = @AllowLobIncludeColumns;

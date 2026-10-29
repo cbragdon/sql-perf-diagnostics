@@ -325,9 +325,10 @@ BEGIN
                     END;
                     SET @NlItem = PARSENAME(@NlItem, 1);
                 END;
-                /*  #NameList holds sysname. With ANSI_WARNINGS OFF a longer item would be cut to 128
-                    characters without an error -- and could then name a different database. */
-                IF LEN(@NlItem) > 128
+                /*  #NameList holds sysname: 128 UTF-16 code units. With ANSI_WARNINGS OFF a longer item
+                    would be cut without an error -- and could then name a different database. DATALENGTH,
+                    not LEN: under an _SC collation LEN counts a surrogate pair as one character. */
+                IF DATALENGTH(@NlItem) > 256
                 BEGIN
                     SET @NlShown = LEFT(@NlItem, 300);
                     RAISERROR('@IncludeDatabases / @ExcludeDatabases item %s is longer than 128 characters, the longest a database name can be.', 16, 1, @NlShown);
@@ -520,9 +521,10 @@ BEGIN
             IF @TlPos > @TlLen OR (@TlInBracket = 0 AND @TlCh = N',')
             BEGIN
                 SET @TlItem = LTRIM(RTRIM(SUBSTRING(@TableList, @TlStart, @TlPos - @TlStart)));
-                /*  #RequestedNames.nm holds 776 characters ([schema].[table], every ] doubled). With
-                    ANSI_WARNINGS OFF a longer item would be cut without an error. */
-                IF LEN(@TlItem) > 776
+                /*  #RequestedNames.nm holds 776 UTF-16 code units ([schema].[table], every ] doubled). With
+                    ANSI_WARNINGS OFF a longer item would be cut without an error. DATALENGTH, not LEN:
+                    under an _SC collation LEN counts a surrogate pair as one character. */
+                IF DATALENGTH(@TlItem) > 1552
                 BEGIN
                     SET @TlShown = LEFT(@TlItem, 300);
                     RAISERROR('@TableList item %s is longer than 776 characters, the longest a schema-qualified table name can be.', 16, 1, @TlShown);
