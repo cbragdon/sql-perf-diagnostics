@@ -137,7 +137,7 @@ CREATE TABLE #PlanXml
 (
     StatementSeq INT IDENTITY(1,1) PRIMARY KEY,
     PlanXml      XML          NULL,
-    SourceNote   NVARCHAR(200) NULL
+    SourceNote   NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL
 );
 
 DECLARE @ResolvedObjectId INT = CASE WHEN @ObjectName IS NOT NULL THEN OBJECT_ID(@ObjectName) END;
@@ -261,19 +261,19 @@ CREATE TABLE #Pred
     PredSeq              INT IDENTITY(1,1) PRIMARY KEY,
     PlanRow              INT           NOT NULL,
     CEModelVersion       INT           NULL,
-    StmtOptmLevel        NVARCHAR(20)  NULL,
+    StmtOptmLevel        NVARCHAR(20) COLLATE DATABASE_DEFAULT  NULL,
     StmtHasRecompile     BIT           NOT NULL DEFAULT 0,
-    VarName              NVARCHAR(128) NULL,
-    VarKind              NVARCHAR(20)  NULL,   -- LocalVar / SniffedParam / UnknownParam / TableVar
-    ParamCompiledValue   NVARCHAR(256) NULL,
-    ParamRuntimeValue    NVARCHAR(256) NULL,
-    CompareOp            NVARCHAR(20)  NULL,   -- EQ / GE / LE / LT / GT / ... ; NULL for TableVar
-    PredKind             NVARCHAR(20)  NULL,   -- EQUALITY / RANGE / TABLEVAR
-    SchemaNameRaw        NVARCHAR(258) NULL,   -- brackets as literal chars (showplan)
-    TableNameRaw         NVARCHAR(258) NULL,
-    ColumnName           NVARCHAR(128) NULL,
-    LeafPhysicalOp       NVARCHAR(60)  NULL,
-    LeafIndexRaw         NVARCHAR(258) NULL,
+    VarName              NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    VarKind              NVARCHAR(20) COLLATE DATABASE_DEFAULT  NULL,   -- LocalVar / SniffedParam / UnknownParam / TableVar
+    ParamCompiledValue   NVARCHAR(256) COLLATE DATABASE_DEFAULT NULL,
+    ParamRuntimeValue    NVARCHAR(256) COLLATE DATABASE_DEFAULT NULL,
+    CompareOp            NVARCHAR(20) COLLATE DATABASE_DEFAULT  NULL,   -- EQ / GE / LE / LT / GT / ... ; NULL for TableVar
+    PredKind             NVARCHAR(20) COLLATE DATABASE_DEFAULT  NULL,   -- EQUALITY / RANGE / TABLEVAR
+    SchemaNameRaw        NVARCHAR(258) COLLATE DATABASE_DEFAULT NULL,   -- brackets as literal chars (showplan)
+    TableNameRaw         NVARCHAR(258) COLLATE DATABASE_DEFAULT NULL,
+    ColumnName           NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    LeafPhysicalOp       NVARCHAR(60) COLLATE DATABASE_DEFAULT  NULL,
+    LeafIndexRaw         NVARCHAR(258) COLLATE DATABASE_DEFAULT NULL,
     LeafIndexOrdered     BIT           NULL,
     LeafEstimateRows     FLOAT         NULL,
     LeafEstRowsRead      FLOAT         NULL,
@@ -392,9 +392,9 @@ DROP TABLE IF EXISTS #ParamList;
 CREATE TABLE #ParamList
 (
     PlanRow       INT,
-    ParamName     NVARCHAR(128),
-    CompiledValue NVARCHAR(256),
-    RuntimeValue  NVARCHAR(256)
+    ParamName     NVARCHAR(128) COLLATE DATABASE_DEFAULT,
+    CompiledValue NVARCHAR(256) COLLATE DATABASE_DEFAULT,
+    RuntimeValue  NVARCHAR(256) COLLATE DATABASE_DEFAULT
 );
 ;WITH XMLNAMESPACES (DEFAULT ''http://schemas.microsoft.com/sqlserver/2004/07/showplan'')
 INSERT #ParamList (PlanRow, ParamName, CompiledValue, RuntimeValue)
@@ -467,12 +467,12 @@ PRINT ''--- Predicates extracted: '' + CONVERT(VARCHAR(10), @cAll)
 CREATE TABLE #StatsUsage
 (
     PlanRow      INT,
-    SchemaRaw    NVARCHAR(258),
-    TableRaw     NVARCHAR(258),
-    StatNameRaw  NVARCHAR(258),
+    SchemaRaw    NVARCHAR(258) COLLATE DATABASE_DEFAULT,
+    TableRaw     NVARCHAR(258) COLLATE DATABASE_DEFAULT,
+    StatNameRaw  NVARCHAR(258) COLLATE DATABASE_DEFAULT,
     ModCount     BIGINT,
     SamplingPct  FLOAT,
-    LastUpdate   NVARCHAR(40)
+    LastUpdate   NVARCHAR(40) COLLATE DATABASE_DEFAULT
 );
 ;WITH XMLNAMESPACES (DEFAULT ''http://schemas.microsoft.com/sqlserver/2004/07/showplan'')
 INSERT #StatsUsage (PlanRow, SchemaRaw, TableRaw, StatNameRaw, ModCount, SamplingPct, LastUpdate)
@@ -492,10 +492,10 @@ CREATE TABLE #StatResolved
     PredSeq          INT PRIMARY KEY,
     ObjectId         INT NULL,
     StatsId          INT NULL,
-    StatName         SYSNAME NULL,
-    SchemaName       SYSNAME NULL,
-    TableName        SYSNAME NULL,
-    ColumnName       SYSNAME NULL,
+    StatName         SYSNAME COLLATE DATABASE_DEFAULT NULL,
+    SchemaName       SYSNAME COLLATE DATABASE_DEFAULT NULL,
+    TableName        SYSNAME COLLATE DATABASE_DEFAULT NULL,
+    ColumnName       SYSNAME COLLATE DATABASE_DEFAULT NULL,
     StatFromUsage    BIT NOT NULL DEFAULT 0,   -- 1 = named by <OptimizerStatsUsage>, 0 = leading-column guess
     HasStats         BIT NOT NULL DEFAULT 0,
     StatRows         BIGINT NULL,
@@ -571,7 +571,7 @@ WHERE sr.ObjectId IS NOT NULL;
 /*  all_density via DBCC SHOW_STATISTICS ... WITH DENSITY_VECTOR, one INSERT..EXEC per distinct
     (ObjectId, StatsId). #DensityVector target is created in the OUTER scope (the procedure form
     reuses the same pattern; a batch-local target dies with the dynamic batch).                  */
-CREATE TABLE #DensityVector (AllDensity FLOAT, AvgLength FLOAT, Cols NVARCHAR(2000));
+CREATE TABLE #DensityVector (AllDensity FLOAT, AvgLength FLOAT, Cols NVARCHAR(2000) COLLATE DATABASE_DEFAULT);
 CREATE TABLE #DensityResolved (ObjectId INT, StatsId INT, AllDensity FLOAT);
 
 DECLARE @dvObj INT, @dvStat INT, @dvSql NVARCHAR(1000), @dvName NVARCHAR(600);
@@ -609,7 +609,7 @@ CREATE TABLE #Histogram
 (
     PredSeq           INT,
     StepNumber        INT,
-    RangeHighKeyStr   NVARCHAR(256),
+    RangeHighKeyStr   NVARCHAR(256) COLLATE DATABASE_DEFAULT,
     RangeHighKeyNum   FLOAT NULL,
     RangeRows         FLOAT,
     EqualRows         FLOAT,
@@ -646,45 +646,45 @@ PRINT ''--- Stats resolved for '' + CONVERT(VARCHAR(10), @srHas) + '' of '' + CO
 CREATE TABLE #Result
 (
     PredSeq                    INT,
-    VariableName               NVARCHAR(128),
-    VariableKind               NVARCHAR(20),
-    SchemaName                 SYSNAME NULL,
-    TableName                  SYSNAME NULL,
-    ColumnName                 SYSNAME NULL,
-    PredicateOp                NVARCHAR(20) NULL,
-    PredicateKind              NVARCHAR(20) NULL,
-    IndexInPlay                NVARCHAR(258) NULL,
-    LeafPhysicalOp             NVARCHAR(60) NULL,
+    VariableName               NVARCHAR(128) COLLATE DATABASE_DEFAULT,
+    VariableKind               NVARCHAR(20) COLLATE DATABASE_DEFAULT,
+    SchemaName                 SYSNAME COLLATE DATABASE_DEFAULT NULL,
+    TableName                  SYSNAME COLLATE DATABASE_DEFAULT NULL,
+    ColumnName                 SYSNAME COLLATE DATABASE_DEFAULT NULL,
+    PredicateOp                NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
+    PredicateKind              NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
+    IndexInPlay                NVARCHAR(258) COLLATE DATABASE_DEFAULT NULL,
+    LeafPhysicalOp             NVARCHAR(60) COLLATE DATABASE_DEFAULT NULL,
     IsCovering                 BIT NULL,
     RowGoalActive              BIT NULL,
     CEModelVersion             INT NULL,
-    Regime                     NVARCHAR(120) NULL,
+    Regime                     NVARCHAR(120) COLLATE DATABASE_DEFAULT NULL,
     ComputedOptimizerEstimate  FLOAT NULL,
-    EstimateSource             NVARCHAR(30) NULL,
+    EstimateSource             NVARCHAR(30) COLLATE DATABASE_DEFAULT NULL,
     PlanEstimateRows           FLOAT NULL,
-    ModelExplainsPlan          NVARCHAR(10) NULL,   -- yes / NO (>2x apart)
+    ModelExplainsPlan          NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,   -- yes / NO (>2x apart)
     HistogramTruthForValue     FLOAT NULL,
-    KnownValue                 NVARCHAR(256) NULL,
+    KnownValue                 NVARCHAR(256) COLLATE DATABASE_DEFAULT NULL,
     HistogramMaxEqRows         FLOAT NULL,
     HistogramSkewRatio         DECIMAL(12,2) NULL,
-    TopHeavyValues             NVARCHAR(400) NULL,
+    TopHeavyValues             NVARCHAR(400) COLLATE DATABASE_DEFAULT NULL,
     EstimateVsTruthRatio       DECIMAL(12,2) NULL,  -- worst-case: HistogramMaxEqRows / ComputedOptimizerEstimate
-    SkewDirection              NVARCHAR(10) NULL,
+    SkewDirection              NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
     TippingPointRows           FLOAT NULL,
     HistSteps                  INT NULL,
     StepsAboveTipping          INT NULL,
-    TippingValueNote           NVARCHAR(300) NULL,
-    WillTip                    NVARCHAR(40) NULL,
-    StatName                   SYSNAME NULL,
+    TippingValueNote           NVARCHAR(300) COLLATE DATABASE_DEFAULT NULL,
+    WillTip                    NVARCHAR(40) COLLATE DATABASE_DEFAULT NULL,
+    StatName                   SYSNAME COLLATE DATABASE_DEFAULT NULL,
     StatFromUsage              BIT NULL,
     StatsSampledPct            DECIMAL(6,2) NULL,
     StatsModFraction           DECIMAL(12,4) NULL,
     StatsLastUpdated           DATETIME2(3) NULL,
     StatsStale                 BIT NULL,
-    Fix                        NVARCHAR(1000) NULL,
-    ProbeValues                NVARCHAR(600) NULL,
-    ProbeSweepScript           NVARCHAR(MAX) NULL,
-    PreciseCrossover           NVARCHAR(300) NULL
+    Fix                        NVARCHAR(1000) COLLATE DATABASE_DEFAULT NULL,
+    ProbeValues                NVARCHAR(600) COLLATE DATABASE_DEFAULT NULL,
+    ProbeSweepScript           NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    PreciseCrossover           NVARCHAR(300) COLLATE DATABASE_DEFAULT NULL
 );
 
 /*  Per-predicate histogram aggregates.                                                           */
@@ -927,7 +927,7 @@ FROM #Result r;
       VALUES and, when the statement text is clean, a wrapped OPTIMIZE FOR script.
 ------------------------------------------------------------------------------------------------*/
 DROP TABLE IF EXISTS #ProbePick;
-CREATE TABLE #ProbePick (PredSeq INT, ProbeValue NVARCHAR(256), ProbeRows BIGINT);
+CREATE TABLE #ProbePick (PredSeq INT, ProbeValue NVARCHAR(256) COLLATE DATABASE_DEFAULT, ProbeRows BIGINT);
 
 IF @ProbeCardinalitySweep = 1
 BEGIN
@@ -1103,8 +1103,8 @@ ORDER BY CASE WHEN EstimateVsTruthRatio IS NULL THEN 0 ELSE 1 END DESC,
 
 CREATE TABLE #StatDetail
 (
-    SchemaName SYSNAME NULL, TableName SYSNAME NULL, ColumnName SYSNAME NULL, StatName SYSNAME NULL,
-    StepNumber INT, RangeHighKey NVARCHAR(256), RangeRows BIGINT, EqualRows BIGINT,
+    SchemaName SYSNAME COLLATE DATABASE_DEFAULT NULL, TableName SYSNAME COLLATE DATABASE_DEFAULT NULL, ColumnName SYSNAME COLLATE DATABASE_DEFAULT NULL, StatName SYSNAME COLLATE DATABASE_DEFAULT NULL,
+    StepNumber INT, RangeHighKey NVARCHAR(256) COLLATE DATABASE_DEFAULT, RangeRows BIGINT, EqualRows BIGINT,
     DistinctRangeRows BIGINT, AvgRangeRows BIGINT
 );
 IF @Debug = 1
@@ -1131,7 +1131,12 @@ DROP TABLE IF EXISTS #ProbePlanXml;   DROP TABLE IF EXISTS #Leaf;';
     DECLARE @sql NVARCHAR(MAX) =
         N'USE ' + QUOTENAME(@DatabaseName) + N';' + NCHAR(13) + NCHAR(10) + @body;
 
-    EXEC sys.sp_executesql @sql,
+    /*  The target's own sp_executesql: the batch then compiles in the target database, so its
+        parameters, variables and literals all take the target's collation -- as when the script runs
+        there. Through this database's sp_executesql they took THIS database's collation and the
+        literals the target's, and a utility database collated differently failed with Msg 468.  */
+    DECLARE @TargetExecuteSql NVARCHAR(300) = QUOTENAME(@DatabaseName) + N'.sys.sp_executesql';
+    EXEC @TargetExecuteSql @sql,
         N'@ObjectName NVARCHAR(776), @QueryId BIGINT, @PlanXml NVARCHAR(MAX), @ProbePlanXml NVARCHAR(MAX), @TippingPointPageFraction DECIMAL(5,3), @SkewRatioThreshold DECIMAL(10,2), @EstimateVsTruthThreshold DECIMAL(10,2), @StaleStatsModFraction DECIMAL(5,3), @ProbeCardinalitySweep BIT, @ProbeValueCount INT, @IncludeSniffableParameters BIT, @TopPredicates INT, @Debug BIT',
         @ObjectName                 = @ObjectName,
         @QueryId                    = @QueryId,
