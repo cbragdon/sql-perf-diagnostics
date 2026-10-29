@@ -176,7 +176,7 @@ BEGIN
         @sqlCachePlan         NVARCHAR(MAX),   -- Section 9c plan-cache pull for CACHE-only dependents
         @sqlBridge            NVARCHAR(MAX),   -- Section 11a exact-bridge dynamic batch
         @Use                  NVARCHAR(MAX),
-        @DbQuoted             sysname,
+        @DbQuoted             NVARCHAR(258),   -- QUOTENAME of a 128-character name: up to 258, more than sysname holds
         @DbId                 INT,
         @Rows                 INT,
         @Msg                  NVARCHAR(2000),
@@ -324,6 +324,14 @@ BEGIN
                         RETURN;
                     END;
                     SET @NlItem = PARSENAME(@NlItem, 1);
+                END;
+                /*  #NameList holds sysname. With ANSI_WARNINGS OFF a longer item would be cut to 128
+                    characters without an error -- and could then name a different database. */
+                IF LEN(@NlItem) > 128
+                BEGIN
+                    SET @NlShown = LEFT(@NlItem, 300);
+                    RAISERROR('@IncludeDatabases / @ExcludeDatabases item %s is longer than 128 characters, the longest a database name can be.', 16, 1, @NlShown);
+                    RETURN;
                 END;
                 IF @NlItem <> N''
                     INSERT #NameList (Which, DatabaseName) VALUES (@NlWhich, @NlItem);
@@ -505,13 +513,21 @@ BEGIN
         /*  Split on commas OUTSIDE square brackets, so a bracket-quoted part may hold a comma:
             [Sales].[Q1, Q2]. Items stay as written -- OBJECT_ID() resolves them, brackets and all. */
         DECLARE @TlPos INT = 1, @TlStart INT = 1, @TlLen INT = LEN(@TableList + N'x') - 1, @TlInBracket BIT = 0,
-                @TlCh NCHAR(1), @TlItem NVARCHAR(MAX);
+                @TlCh NCHAR(1), @TlItem NVARCHAR(MAX), @TlShown NVARCHAR(300);
         WHILE @TlPos <= @TlLen + 1
         BEGIN
             SET @TlCh = SUBSTRING(@TableList, @TlPos, 1);
             IF @TlPos > @TlLen OR (@TlInBracket = 0 AND @TlCh = N',')
             BEGIN
                 SET @TlItem = LTRIM(RTRIM(SUBSTRING(@TableList, @TlStart, @TlPos - @TlStart)));
+                /*  #RequestedNames.nm holds 776 characters ([schema].[table], every ] doubled). With
+                    ANSI_WARNINGS OFF a longer item would be cut without an error. */
+                IF LEN(@TlItem) > 776
+                BEGIN
+                    SET @TlShown = LEFT(@TlItem, 300);
+                    RAISERROR('@TableList item %s is longer than 776 characters, the longest a schema-qualified table name can be.', 16, 1, @TlShown);
+                    RETURN;
+                END;
                 IF @TlItem <> N''
                     INSERT #RequestedNames (nm) VALUES (@TlItem);
                 SET @TlStart = @TlPos + 1;
