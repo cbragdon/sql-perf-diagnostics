@@ -163,9 +163,9 @@ BEGIN
     DROP TABLE IF EXISTS #SkippedDatabases;
     DROP TABLE IF EXISTS #NameList;
 
-    CREATE TABLE #DatabaseList (DatabaseName sysname NOT NULL PRIMARY KEY);
-    CREATE TABLE #SkippedDatabases (DatabaseName sysname NOT NULL, Reason NVARCHAR(400) NOT NULL);
-    CREATE TABLE #NameList (Which CHAR(3) NOT NULL, DatabaseName sysname NOT NULL);
+    CREATE TABLE #DatabaseList (DatabaseName sysname COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY);
+    CREATE TABLE #SkippedDatabases (DatabaseName sysname COLLATE DATABASE_DEFAULT NOT NULL, Reason NVARCHAR(400) COLLATE DATABASE_DEFAULT NOT NULL);
+    CREATE TABLE #NameList (Which CHAR(3) COLLATE DATABASE_DEFAULT NOT NULL, DatabaseName sysname COLLATE DATABASE_DEFAULT NOT NULL);
 
     /*  Name lists. Items are comma-separated, and an item may be bracket-quoted ([name], with ]] for a ]
         inside it) so a database whose name contains a comma can be named; QUOTENAME output is valid
@@ -197,9 +197,10 @@ BEGIN
                     END;
                     SET @NlItem = PARSENAME(@NlItem, 1);
                 END;
-                /*  #NameList holds sysname. With ANSI_WARNINGS OFF a longer item would be cut to 128
-                    characters without an error -- and could then name a different database. */
-                IF LEN(@NlItem) > 128
+                /*  #NameList holds sysname: 128 UTF-16 code units. With ANSI_WARNINGS OFF a longer item
+                    would be cut without an error -- and could then name a different database. DATALENGTH,
+                    not LEN: under an _SC collation LEN counts a surrogate pair as one character. */
+                IF DATALENGTH(@NlItem) > 256
                 BEGIN
                     SET @NlShown = LEFT(@NlItem, 300);
                     RAISERROR('@IncludeDatabases / @ExcludeDatabases item %s is longer than 128 characters, the longest a database name can be.', 16, 1, @NlShown);
@@ -234,8 +235,8 @@ BEGIN
           AND d.source_database_id IS NULL
           AND d.is_query_store_on = 1
           AND (@IncludeDatabases IS NULL
-               OR EXISTS (SELECT 1 FROM #NameList n WHERE n.Which = 'inc' AND n.DatabaseName = d.name))
-          AND NOT EXISTS (SELECT 1 FROM #NameList n WHERE n.Which = 'exc' AND n.DatabaseName = d.name)
+               OR EXISTS (SELECT 1 FROM #NameList n WHERE n.Which = 'inc' AND n.DatabaseName COLLATE DATABASE_DEFAULT = d.name COLLATE DATABASE_DEFAULT))
+          AND NOT EXISTS (SELECT 1 FROM #NameList n WHERE n.Which = 'exc' AND n.DatabaseName COLLATE DATABASE_DEFAULT = d.name COLLATE DATABASE_DEFAULT)
           AND (@ExcludeHostingDatabase = 0 OR d.name <> DB_NAME());
 
         /*  A database asked for by name and then filtered out is REPORTED, not dropped silently --
@@ -273,7 +274,7 @@ BEGIN
                          N'not eligible, and sys.databases does not show this login why')
                END
         FROM #NameList n
-        LEFT JOIN sys.databases d ON d.name = n.DatabaseName
+        LEFT JOIN sys.databases d ON d.name COLLATE DATABASE_DEFAULT = n.DatabaseName COLLATE DATABASE_DEFAULT
         WHERE n.Which = 'inc'
           AND NOT EXISTS (SELECT 1 FROM #DatabaseList dl WHERE dl.DatabaseName = n.DatabaseName);
     END
@@ -320,35 +321,35 @@ BEGIN
     DROP TABLE IF EXISTS #ModeResults;
 
     CREATE TABLE #Results (
-        [DatabaseName]                         sysname NULL,
-        [object_name]                          nvarchar(128) NULL,
+        [DatabaseName]                         sysname COLLATE DATABASE_DEFAULT NULL,
+        [object_name]                          nvarchar(128) COLLATE DATABASE_DEFAULT NULL,
         [object_id]                            bigint NULL,
         [query_id]                             bigint NULL,
         [plan_id]                              bigint NULL,
         [query_hash]                           binary(8) NULL,
         [query_plan_hash]                      binary(8) NULL,
         [plan_handle]                          varbinary(64) NULL,
-        [query_sql_text]                       nvarchar(MAX) NULL,
+        [query_sql_text]                       nvarchar(MAX) COLLATE DATABASE_DEFAULT NULL,
         [CacheLastExecutionTime]               datetime NULL,
         [CacheActualPlanAvailable]             int NULL,
         [SniffingSeverityScore]                int NULL,
-        [SniffingSeverityBand]                 varchar(8) NULL,
+        [SniffingSeverityBand]                 varchar(8) COLLATE DATABASE_DEFAULT NULL,
         [SniffingSeverityScoreCeiling]         int NULL,
         [SignalsUnavailable]                   int NULL,
-        [PlanStability]                        varchar(8) NULL,
-        [PlanShapeStability]                   varchar(11) NULL,
-        [MemoryGrantStability]                 varchar(11) NULL,
-        [ParallelismStability]                 varchar(11) NULL,
-        [OperatorSkewStability]                varchar(11) NULL,
-        [SpillStability]                       varchar(11) NULL,
-        [IOVarianceStability]                  varchar(11) NULL,
-        [MemoryGrantFeedbackState]             nvarchar(60) NULL,
-        [MemoryGrantFeedbackNote]              nvarchar(254) NULL,
-        [SniffingSeveritySignals]              nvarchar(MAX) NULL,
-        [PlanForcingCandidate]                 varchar(3) NULL,
-        [SuggestedRemediationPath]             varchar(99) NULL,
-        [RootCauseHint]                        varchar(77) NULL,
-        [HighDurationLowCpu_DominantWaitCategory] varchar(48) NULL,
+        [PlanStability]                        varchar(8) COLLATE DATABASE_DEFAULT NULL,
+        [PlanShapeStability]                   varchar(11) COLLATE DATABASE_DEFAULT NULL,
+        [MemoryGrantStability]                 varchar(11) COLLATE DATABASE_DEFAULT NULL,
+        [ParallelismStability]                 varchar(11) COLLATE DATABASE_DEFAULT NULL,
+        [OperatorSkewStability]                varchar(11) COLLATE DATABASE_DEFAULT NULL,
+        [SpillStability]                       varchar(11) COLLATE DATABASE_DEFAULT NULL,
+        [IOVarianceStability]                  varchar(11) COLLATE DATABASE_DEFAULT NULL,
+        [MemoryGrantFeedbackState]             nvarchar(60) COLLATE DATABASE_DEFAULT NULL,
+        [MemoryGrantFeedbackNote]              nvarchar(254) COLLATE DATABASE_DEFAULT NULL,
+        [SniffingSeveritySignals]              nvarchar(MAX) COLLATE DATABASE_DEFAULT NULL,
+        [PlanForcingCandidate]                 varchar(3) COLLATE DATABASE_DEFAULT NULL,
+        [SuggestedRemediationPath]             varchar(99) COLLATE DATABASE_DEFAULT NULL,
+        [RootCauseHint]                        varchar(77) COLLATE DATABASE_DEFAULT NULL,
+        [HighDurationLowCpu_DominantWaitCategory] varchar(48) COLLATE DATABASE_DEFAULT NULL,
         [TotalExecutions]                      bigint NULL,
         [AvgLogicalReads]                      float NULL,
         [MaxLogicalReads]                      bigint NULL,
@@ -367,14 +368,14 @@ BEGIN
         [CacheActualParallelismFlag]           bit NULL,
         [EstimateVsActualRatio]                float NULL,
         [MaxToMinRowRatio]                     bigint NULL,
-        [TableSchemaRaw]                       nvarchar(128) NULL,
-        [TableNameRaw]                         nvarchar(128) NULL,
+        [TableSchemaRaw]                       nvarchar(128) COLLATE DATABASE_DEFAULT NULL,
+        [TableNameRaw]                         nvarchar(128) COLLATE DATABASE_DEFAULT NULL,
         [TableRank]                            bigint NULL,
         [AccessNodeId]                         int NULL,
-        [AccessPhysicalOp]                     nvarchar(50) NULL,
-        [KeyScope]                             nvarchar(85) NULL,
+        [AccessPhysicalOp]                     nvarchar(50) COLLATE DATABASE_DEFAULT NULL,
+        [KeyScope]                             nvarchar(85) COLLATE DATABASE_DEFAULT NULL,
         [AccessPathsOnThisTable]               int NULL,
-        [ComputedIncludeColumns]               nvarchar(MAX) NULL,
+        [ComputedIncludeColumns]               nvarchar(MAX) COLLATE DATABASE_DEFAULT NULL,
         [AccessEstimateIO]                     float NULL,
         [AccessActualIO]                       float NULL,
         [AccessEstimateRows]                   float NULL,
@@ -384,54 +385,54 @@ BEGIN
         [WorstSkewRatio]                       float NULL,
         [SpillEventCount]                      int NULL,
         [WorstSpillLevel]                      int NULL,
-        [SpillDetectionSource]                 varchar(20) NULL,
-        [SpillAttributionTied]                 varchar(3) NULL,
+        [SpillDetectionSource]                 varchar(20) COLLATE DATABASE_DEFAULT NULL,
+        [SpillAttributionTied]                 varchar(3) COLLATE DATABASE_DEFAULT NULL,
         [EstimatedTableSizeMB]                 decimal(29,7) NULL,
-        [BaseIndexCompression]               varchar(4) NULL,
-        [CandidateIndexName]                   nvarchar(124) NULL,
+        [BaseIndexCompression]               varchar(4) COLLATE DATABASE_DEFAULT NULL,
+        [CandidateIndexName]                   nvarchar(124) COLLATE DATABASE_DEFAULT NULL,
         [KeyColumnCount]                       int NULL,
         [KeyByteSize]                          int NULL,
-        [ExcludedKeyColumns]                   nvarchar(MAX) NULL,
-        [ExcludedIncludeColumns]               nvarchar(MAX) NULL,
+        [ExcludedKeyColumns]                   nvarchar(MAX) COLLATE DATABASE_DEFAULT NULL,
+        [ExcludedIncludeColumns]               nvarchar(MAX) COLLATE DATABASE_DEFAULT NULL,
         [isXML]                                bit NULL,
-        [isJSON]                               nvarchar(20) NULL,
-        [BaseIndexKeyColumns]           nvarchar(MAX) NULL,
-        [BaseIndexIncludeColumns]       nvarchar(MAX) NULL,
-        [KeyColumnsFromPredicates]             nvarchar(MAX) NULL,
-        [KeyColumnsFromJoins]                  nvarchar(MAX) NULL,
-        [KeyColumnsFromGroupBy]                nvarchar(MAX) NULL,
-        [KeyColumnsFromOrderBy]                nvarchar(MAX) NULL,
+        [isJSON]                               nvarchar(20) COLLATE DATABASE_DEFAULT NULL,
+        [BaseIndexKeyColumns]           nvarchar(MAX) COLLATE DATABASE_DEFAULT NULL,
+        [BaseIndexIncludeColumns]       nvarchar(MAX) COLLATE DATABASE_DEFAULT NULL,
+        [KeyColumnsFromPredicates]             nvarchar(MAX) COLLATE DATABASE_DEFAULT NULL,
+        [KeyColumnsFromJoins]                  nvarchar(MAX) COLLATE DATABASE_DEFAULT NULL,
+        [KeyColumnsFromGroupBy]                nvarchar(MAX) COLLATE DATABASE_DEFAULT NULL,
+        [KeyColumnsFromOrderBy]                nvarchar(MAX) COLLATE DATABASE_DEFAULT NULL,
         [EstimatedPlanXML]                     xml NULL,
         [CacheActualPlanXML]                   xml NULL,
-        [BaseIndexCreateSQL]            nvarchar(MAX) NULL,
-        [BaseIndexDropSQL]              nvarchar(400) NULL,
-        [BaseIndexBasis]             varchar(185) NULL,
-        [RecommendedRecompileSQL]              nvarchar(MAX) NULL,
-        [Platform]                             nvarchar(60) NULL,
-        [EditionName]                          nvarchar(128) NULL,
+        [BaseIndexCreateSQL]            nvarchar(MAX) COLLATE DATABASE_DEFAULT NULL,
+        [BaseIndexDropSQL]              nvarchar(400) COLLATE DATABASE_DEFAULT NULL,
+        [BaseIndexBasis]             varchar(185) COLLATE DATABASE_DEFAULT NULL,
+        [RecommendedRecompileSQL]              nvarchar(MAX) COLLATE DATABASE_DEFAULT NULL,
+        [Platform]                             nvarchar(60) COLLATE DATABASE_DEFAULT NULL,
+        [EditionName]                          nvarchar(128) COLLATE DATABASE_DEFAULT NULL,
         [EngineEdition]                        int NULL,
-        [QueryCaptureMode]                     nvarchar(60) NULL,
+        [QueryCaptureMode]                     nvarchar(60) COLLATE DATABASE_DEFAULT NULL,
         [SQLServerMajorVersion]                int NULL,
-        [MIUpdatePolicy]                       nvarchar(128) NULL,
+        [MIUpdatePolicy]                       nvarchar(128) COLLATE DATABASE_DEFAULT NULL,
         [DatabaseCompatibilityLevel]           int NULL,
-        [LegacyCEDatabaseSetting]              nvarchar(40) NULL,
+        [LegacyCEDatabaseSetting]              nvarchar(40) COLLATE DATABASE_DEFAULT NULL,
         [PlanCardinalityEstimationModel]       int NULL,
-        [MixedCEModelAcrossPlans]              varchar(3) NULL,
-        [PlanUsesLegacyCE]                     varchar(3) NULL,
-        [PspoRole]                             nvarchar(12) NULL,
+        [MixedCEModelAcrossPlans]              varchar(3) COLLATE DATABASE_DEFAULT NULL,
+        [PlanUsesLegacyCE]                     varchar(3) COLLATE DATABASE_DEFAULT NULL,
+        [PspoRole]                             nvarchar(12) COLLATE DATABASE_DEFAULT NULL,
         [PspoParentQueryId]                    bigint NULL,
         [PspoVariantCount]                     int NULL,
         [AI Prompt]                            xml NULL,
-        [AIPromptText]                         nvarchar(max) NULL,  -- staging: stripped into [AI Prompt] after the loop, then dropped
+        [AIPromptText]                         nvarchar(max) COLLATE DATABASE_DEFAULT NULL,  -- staging: stripped into [AI Prompt] after the loop, then dropped
         [AIPromptTcRowId]                      int NULL             -- internal: rejoins a row to ITS table candidate for the prompt UPDATEs; dropped after the loop
     );
 
     CREATE TABLE #ModeResults (
-        [DatabaseName]                         sysname NULL,
-        [object_name]                          nvarchar(128) NULL,
+        [DatabaseName]                         sysname COLLATE DATABASE_DEFAULT NULL,
+        [object_name]                          nvarchar(128) COLLATE DATABASE_DEFAULT NULL,
         [query_id]                             bigint NULL,
         [plan_id]                              bigint NULL,
-        [TableName]                            nvarchar(257) NULL,
+        [TableName]                            nvarchar(257) COLLATE DATABASE_DEFAULT NULL,
         [CandidateTableCount]                  int NULL,
         [TableRankB]                           bigint NULL,
         [ModeB_RankedIO]                       float NULL,
@@ -439,14 +440,14 @@ BEGIN
         [ModeC_RankedSkew]                     float NULL,
         [TableRankD]                           bigint NULL,
         [ModeD_RankedSpill]                    int NULL,
-        [ModeB_Winner]                         nvarchar(257) NULL,
-        [ModeC_Winner]                         nvarchar(257) NULL,
-        [ModeD_Winner]                         nvarchar(257) NULL,
-        [ModeAgreement]                        varchar(22) NULL,
-        [ModeB_InputIsFlat]                    varchar(3) NULL,
-        [ModeC_InputIsFlat]                    varchar(3) NULL,
-        [ModeD_InputIsFlat]                    varchar(3) NULL,
-        [ModeD_AttributionWasTied]             varchar(3) NULL
+        [ModeB_Winner]                         nvarchar(257) COLLATE DATABASE_DEFAULT NULL,
+        [ModeC_Winner]                         nvarchar(257) COLLATE DATABASE_DEFAULT NULL,
+        [ModeD_Winner]                         nvarchar(257) COLLATE DATABASE_DEFAULT NULL,
+        [ModeAgreement]                        varchar(22) COLLATE DATABASE_DEFAULT NULL,
+        [ModeB_InputIsFlat]                    varchar(3) COLLATE DATABASE_DEFAULT NULL,
+        [ModeC_InputIsFlat]                    varchar(3) COLLATE DATABASE_DEFAULT NULL,
+        [ModeD_InputIsFlat]                    varchar(3) COLLATE DATABASE_DEFAULT NULL,
+        [ModeD_AttributionWasTied]             varchar(3) COLLATE DATABASE_DEFAULT NULL
     );
 
     /*======================================================================================
@@ -624,7 +625,7 @@ BEGIN
 
     CREATE TABLE #GrantFeedback (
         plan_id       BIGINT       NOT NULL,
-        FeedbackState NVARCHAR(60) NULL,
+        FeedbackState NVARCHAR(60) COLLATE DATABASE_DEFAULT NULL,
         AdditionalKB  BIGINT       NULL
     );
 
@@ -644,11 +645,11 @@ BEGIN
         plan_id                    BIGINT         NOT NULL,
         query_hash                 BINARY(8)      NOT NULL,
         query_plan_hash            BINARY(8)      NOT NULL,
-        QueryPlanHashText          VARCHAR(34)    NULL,
-        QueryHashText              VARCHAR(34)    NULL,
+        QueryPlanHashText          VARCHAR(34) COLLATE DATABASE_DEFAULT    NULL,
+        QueryHashText              VARCHAR(34) COLLATE DATABASE_DEFAULT    NULL,
         object_id                  BIGINT         NULL,
-        object_name                NVARCHAR(128)  NOT NULL,
-        query_sql_text             NVARCHAR(MAX)  NULL,
+        object_name                NVARCHAR(128) COLLATE DATABASE_DEFAULT  NOT NULL,
+        query_sql_text             NVARCHAR(MAX) COLLATE DATABASE_DEFAULT  NULL,
         EstimatedPlanXML           XML            NULL,
         TotalExecutions            BIGINT         NULL,
         AvgLogicalReads            FLOAT          NULL,
@@ -711,20 +712,20 @@ BEGIN
         CacheMaxSpills             BIGINT         NULL,
         CacheMinDop                BIGINT         NULL,
         CacheMaxDop                BIGINT         NULL,
-        PspoRole                   NVARCHAR(12)   NULL,
+        PspoRole                   NVARCHAR(12) COLLATE DATABASE_DEFAULT   NULL,
         PspoParentQueryId          BIGINT         NULL,
         PspoVariantCount           INT            NULL
     );
 
     CREATE TABLE #ClusteringKeyColumns (
-        TableSchemaRaw NVARCHAR(258) NULL,
-        TableNameRaw   NVARCHAR(258) NULL,
-        ColumnName     sysname       NULL
+        TableSchemaRaw NVARCHAR(258) COLLATE DATABASE_DEFAULT NULL,
+        TableNameRaw   NVARCHAR(258) COLLATE DATABASE_DEFAULT NULL,
+        ColumnName     sysname COLLATE DATABASE_DEFAULT       NULL
     );
 
     CREATE TABLE #TableSizeLookup (
-        TableSchemaRaw       NVARCHAR(258)  NULL,
-        TableNameRaw         NVARCHAR(258)  NULL,
+        TableSchemaRaw       NVARCHAR(258) COLLATE DATABASE_DEFAULT  NULL,
+        TableNameRaw         NVARCHAR(258) COLLATE DATABASE_DEFAULT  NULL,
         EstimatedTableSizeMB NUMERIC(29,7)  NULL
     );
 
@@ -732,17 +733,17 @@ BEGIN
     -- #TableSizeLookup immediately above -- computed here, before #TableRollup exists, for the
     -- same reason #TableSizeLookup is. See the script's own comment for the full reasoning.
     CREATE TABLE #XmlColumnCheck (
-        TableSchemaRaw NVARCHAR(258) NULL,
-        TableNameRaw   NVARCHAR(258) NULL,
+        TableSchemaRaw NVARCHAR(258) COLLATE DATABASE_DEFAULT NULL,
+        TableNameRaw   NVARCHAR(258) COLLATE DATABASE_DEFAULT NULL,
         isXML          BIT           NULL
     );
 
     -- Section 8d in the script: isJSON's NativeCovered/NativeUncovered states. Same shape as
     -- #XmlColumnCheck immediately above, same reason. See the script's own comment.
     CREATE TABLE #JsonNativeColumnCheck (
-        TableSchemaRaw  NVARCHAR(258) NULL,
-        TableNameRaw    NVARCHAR(258) NULL,
-        NativeJsonState NVARCHAR(20)  NULL
+        TableSchemaRaw  NVARCHAR(258) COLLATE DATABASE_DEFAULT NULL,
+        TableNameRaw    NVARCHAR(258) COLLATE DATABASE_DEFAULT NULL,
+        NativeJsonState NVARCHAR(20) COLLATE DATABASE_DEFAULT  NULL
     );
 
     /*----------------------------------------------------------------------------------------
@@ -1758,10 +1759,10 @@ BEGIN
             QUOTENAME on the catalog side is load-bearing: showplan carries Object/@Schema and @Table
             with brackets embedded as literal characters, and sys.schemas.name does not.            */
         CREATE TABLE #ColumnEligibility (
-            TableSchemaRaw  NVARCHAR(258) NULL,
-            TableNameRaw    NVARCHAR(258) NULL,
-            ColumnName      sysname       NULL,
-            TypeName        sysname       NOT NULL,
+            TableSchemaRaw  NVARCHAR(258) COLLATE DATABASE_DEFAULT NULL,
+            TableNameRaw    NVARCHAR(258) COLLATE DATABASE_DEFAULT NULL,
+            ColumnName      sysname COLLATE DATABASE_DEFAULT       NULL,
+            TypeName        sysname COLLATE DATABASE_DEFAULT       NOT NULL,
             KeyEligible     INT           NOT NULL,
             IncludeEligible INT           NOT NULL,
             IsLobType       INT           NOT NULL,
@@ -1769,8 +1770,8 @@ BEGIN
         );
 
         CREATE TABLE #EligibilityTables (
-            TableSchemaRaw NVARCHAR(258) NULL,
-            TableNameRaw   NVARCHAR(258) NULL
+            TableSchemaRaw NVARCHAR(258) COLLATE DATABASE_DEFAULT NULL,
+            TableNameRaw   NVARCHAR(258) COLLATE DATABASE_DEFAULT NULL
         );
 
         INSERT INTO #EligibilityTables (TableSchemaRaw, TableNameRaw)
@@ -1796,8 +1797,8 @@ BEGIN
         JOIN sys.schemas  s ON s.schema_id    = o.schema_id
         WHERE o.type IN (''U'', ''V'')
           AND EXISTS (SELECT 1 FROM #EligibilityTables et
-                      WHERE et.TableSchemaRaw = QUOTENAME(s.name)
-                        AND et.TableNameRaw   = QUOTENAME(o.name));'
+                      WHERE et.TableSchemaRaw COLLATE DATABASE_DEFAULT = QUOTENAME(s.name) COLLATE DATABASE_DEFAULT
+                        AND et.TableNameRaw   COLLATE DATABASE_DEFAULT = QUOTENAME(o.name) COLLATE DATABASE_DEFAULT);'
 
         EXEC sys.sp_executesql @Sql;
 
@@ -1815,12 +1816,12 @@ BEGIN
         SET NUMERIC_ROUNDABORT OFF;
 
         CREATE TABLE #ComputedColumnEligibility (
-            TableSchemaRaw     NVARCHAR(258) NULL,
-            TableNameRaw       NVARCHAR(258) NULL,
-            ComputedColumnName sysname       NULL,
-            TypeName           sysname       NULL,
+            TableSchemaRaw     NVARCHAR(258) COLLATE DATABASE_DEFAULT NULL,
+            TableNameRaw       NVARCHAR(258) COLLATE DATABASE_DEFAULT NULL,
+            ComputedColumnName sysname COLLATE DATABASE_DEFAULT       NULL,
+            TypeName           sysname COLLATE DATABASE_DEFAULT       NULL,
             IsEligible         INT           NULL,
-            Reason             NVARCHAR(300) NULL
+            Reason             NVARCHAR(300) COLLATE DATABASE_DEFAULT NULL
         );
 
         SET @Sql = @Use + N'
@@ -1847,10 +1848,12 @@ BEGIN
                  ELSE ''computed, not indexable (engine declined; no more specific reason resolved)''
             END
         FROM (SELECT DISTINCT TableSchemaRaw, TableNameRaw, ComputedColumnName FROM #ComputedColumnSources) cc
-        JOIN sys.schemas s   ON QUOTENAME(s.name) = cc.TableSchemaRaw
-        JOIN sys.objects o   ON o.schema_id = s.schema_id AND QUOTENAME(o.name) = cc.TableNameRaw
+        JOIN sys.schemas s   ON QUOTENAME(s.name) COLLATE DATABASE_DEFAULT = cc.TableSchemaRaw COLLATE DATABASE_DEFAULT
+        JOIN sys.objects o   ON o.schema_id = s.schema_id
+                            AND QUOTENAME(o.name) COLLATE DATABASE_DEFAULT = cc.TableNameRaw COLLATE DATABASE_DEFAULT
         JOIN sys.tables  tbl ON tbl.object_id = o.object_id
-        JOIN sys.columns c   ON c.object_id = o.object_id AND c.name = cc.ComputedColumnName
+        JOIN sys.columns c   ON c.object_id = o.object_id
+                            AND c.name COLLATE DATABASE_DEFAULT = cc.ComputedColumnName COLLATE DATABASE_DEFAULT
         JOIN sys.types   t   ON t.user_type_id = c.user_type_id;'
 
         EXEC sys.sp_executesql @Sql, N'@AllowLobIn BIT', @AllowLobIn = @AllowLobIncludeColumns;
@@ -1889,8 +1892,10 @@ BEGIN
             ON  rca.object_name = cm.object_name AND rca.query_id = cm.query_id AND rca.plan_id = cm.plan_id
             AND rca.ExprAlias = ColRef.value('@Column', 'nvarchar(128)')
         JOIN #ComputedColumnEligibility cce
-            ON  cce.TableSchemaRaw = rca.TableSchemaRaw AND cce.TableNameRaw = rca.TableNameRaw
-            AND cce.ComputedColumnName = rca.ComputedColumnName AND cce.IsEligible = 1
+            ON  cce.TableSchemaRaw     COLLATE DATABASE_DEFAULT = rca.TableSchemaRaw     COLLATE DATABASE_DEFAULT
+            AND cce.TableNameRaw       COLLATE DATABASE_DEFAULT = rca.TableNameRaw       COLLATE DATABASE_DEFAULT
+            AND cce.ComputedColumnName COLLATE DATABASE_DEFAULT = rca.ComputedColumnName COLLATE DATABASE_DEFAULT
+            AND cce.IsEligible = 1
         WHERE AP.PlanXml IS NOT NULL
           AND LeafOp.exist('(./*/Object/@Table)[1]') = 1
           AND NOT EXISTS (
@@ -1920,8 +1925,10 @@ BEGIN
             ON  rca.object_name = src.object_name AND rca.query_id = src.query_id AND rca.plan_id = src.plan_id
             AND rca.ExprAlias = src.ExprAlias
         JOIN #ComputedColumnEligibility cce
-            ON  cce.TableSchemaRaw = rca.TableSchemaRaw AND cce.TableNameRaw = rca.TableNameRaw
-            AND cce.ComputedColumnName = rca.ComputedColumnName AND cce.IsEligible = 1
+            ON  cce.TableSchemaRaw     COLLATE DATABASE_DEFAULT = rca.TableSchemaRaw     COLLATE DATABASE_DEFAULT
+            AND cce.TableNameRaw       COLLATE DATABASE_DEFAULT = rca.TableNameRaw       COLLATE DATABASE_DEFAULT
+            AND cce.ComputedColumnName COLLATE DATABASE_DEFAULT = rca.ComputedColumnName COLLATE DATABASE_DEFAULT
+            AND cce.IsEligible = 1
         LEFT JOIN #OperatorLeafMap olm
                ON  olm.object_name = src.object_name AND olm.query_id = src.query_id
                AND olm.plan_id = src.plan_id        AND olm.SourceNodeId = src.SourceNodeId
@@ -2420,10 +2427,10 @@ BEGIN
       the candidate names are in tempdb, the catalog names in the target.
     ----------------------------------------------------------------------------------------*/
     CREATE TABLE #StatsFreshness (
-        TableSchemaRaw      NVARCHAR(258)  NULL,
-        TableNameRaw        NVARCHAR(258)  NULL,
-        StatsName           NVARCHAR(128)  NULL,
-        LeadingColumn       NVARCHAR(128)  NULL,
+        TableSchemaRaw      NVARCHAR(258) COLLATE DATABASE_DEFAULT  NULL,
+        TableNameRaw        NVARCHAR(258) COLLATE DATABASE_DEFAULT  NULL,
+        StatsName           NVARCHAR(128) COLLATE DATABASE_DEFAULT  NULL,
+        LeadingColumn       NVARCHAR(128) COLLATE DATABASE_DEFAULT  NULL,
         IsIndexStatistics   BIT            NULL,
         NoRecompute         BIT            NULL,
         LastUpdated         DATETIME2(7)   NULL,
