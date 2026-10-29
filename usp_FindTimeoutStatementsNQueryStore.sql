@@ -90,7 +90,7 @@ BEGIN
     DECLARE
         @Sql            NVARCHAR(MAX),
         @Use            NVARCHAR(MAX),
-        @DbQuoted       sysname,
+        @DbQuoted       NVARCHAR(258),   -- QUOTENAME of a 128-character name: up to 258, more than sysname holds
         @DbId           INT,
         @EngineEdition  INT = TRY_CAST(SERVERPROPERTY('EngineEdition') AS INT),
         @Since          DATETIME2(7),
@@ -163,6 +163,14 @@ BEGIN
                         RETURN;
                     END;
                     SET @NlItem = PARSENAME(@NlItem, 1);
+                END;
+                /*  #NameList holds sysname. With ANSI_WARNINGS OFF a longer item would be cut to 128
+                    characters without an error -- and could then name a different database. */
+                IF LEN(@NlItem) > 128
+                BEGIN
+                    SET @NlShown = LEFT(@NlItem, 300);
+                    RAISERROR('@IncludeDatabases / @ExcludeDatabases item %s is longer than 128 characters, the longest a database name can be.', 16, 1, @NlShown);
+                    RETURN;
                 END;
                 IF @NlItem <> N''
                     INSERT #NameList (Which, DatabaseName) VALUES (@NlWhich, @NlItem);
